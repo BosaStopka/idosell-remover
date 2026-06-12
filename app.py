@@ -10,6 +10,7 @@ Bezpieczenstwo:
 - sekrety Allegro w allegro_config.json, nigdy nie sa logowane
   ani wysylane do przegladarki.
 """
+import base64
 import hashlib
 import io
 import json
@@ -1256,6 +1257,240 @@ def idosell_product_process(product_id):
     to_delete = sum(1 for d in decisions if d.get("action") == "delete")
     return jsonify({"jobs": created, "errors": errors,
                     "kept": skipped, "marked_delete": to_delete})
+
+
+# ------------- IdoSell FAZA 2: wykonanie planu (zapis do sklepu) -------------
+
+IDO_AUDIT_FILE = BASE / "idosell_audit.jsonl"
+IDO_ORIGINALS_DIR = ORIGINALS_DIR / "idosell"
+
+
+def ido_audit(operation: str, product_id, details: dict):
+    """Dziennik KAZDEJ operacji zapisu do IdoSell (append-only)."""
+    entry = {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+             "operation": operation, "product_id": product_id} | details
+    try:
+        with IDO_AUDIT_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+@app.get("/api/idosell/audit")
+def idosell_audit_list():
+    if not IDO_AUDIT_FILE.exists():
+        return jsonify([])
+    lines = IDO_AUDIT_FILE.read_text(encoding="utf-8").strip().splitlines()
+    return jsonify([json.loads(x) for x in lines[-50:]][::-1])
+
+
+def load_ido_plan(product_id: int) -> dict:
+    plan_file = DONE_DIR / str(product_id) / "plan.json"
+    if not plan_file.exists():
+        raise ValueError("Brak planu dla tego produktu - najpierw wybierz zdjecia")
+    plan = json.loads(plan_file.read_text(encoding="utf-8"))
+    if plan.get("source") != "idosell":
+        raise ValueError("Plan tego ID pochodzi z modulu Allegro, nie IdoSell")
+    return plan
+
+
+def save_ido_plan(product_id: int, plan: dict):
+    (DONE_DIR / str(product_id) / "plan.json").write_text(
+        json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def build_ido_plan_preview(product_id: int) -> dict:
+    """Sklada podglad: co zostanie wgrane / zostawione / usuniete."""
+    plan = load_ido_plan(product_id)
+    items = []
+    ready = True
+    for d in plan["decisions"]:
+        item = {"index": d["index"], "action": d["action"], "url": d["url"],
+                "image_id": d.get("image_id"), "slot": d.get("slot")}
+        if d["action"] == "process":
+            rel = f"{product_id}/{product_id}_{d['index']}.jpg"
+            path = DONE_DIR / rel
+            item["local"] = rel if path.exists() else None
+            if item["local"]:
+                item["size_kb"] = round(path.stat().st_size / 1024)
+            else:
+                ready = False
+        items.append(item)
+    final_count = sum(1 for d in plan["decisions"] if d["action"] != "delete")
+    return {
+        "product_id": product_id,
+        "items": items,
+        "ready": ready,
+        "final_count": final_count,
+        "executed_at": plan.get("executed_at"),
+        "verified": plan.get("verified"),
+        "apply_macro": idosell_client.apply_macro_setting(),
+    }
+
+
+@app.get("/api/idosell/products/<int:product_id>/plan")
+def idosell_product_plan(product_id):
+    try:
+        return jsonify(build_ido_plan_preview(product_id))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+
+
+def ido_backup_gallery(product_id: int, current: list[dict]) -> list[dict]:
+    """Fizyczny backup aktualnych zdjec produktu na dysk
+    (originals/idosell/{productId}/). Zwraca liste wpisow do plan.json."""
+    backup_dir = IDO_ORIGINALS_DIR / str(product_id)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = []
+    for img in current:
+        data = idosell_client.download_image(img["url"])
+        fname = img["id"] or f"{product_id}_{img['slot']}.jpg"
+        (backup_dir / fname).write_bytes(data)
+        backup.append({"id": img["id"], "slot": img["slot"],
+                       "priority": img["priority"], "hash": img["hash"],
+                       "url": img["url"],
+                       "file": f"idosell/{product_id}/{fname}"})
+    return backup
+
+
+def ido_verify_gallery(product_id: int, expected_count: int) -> dict:
+    """Weryfikacja GET-em po zapisie: liczba zdjec i ciaglosc slotow."""
+    after = idosell_client.get_product_images(product_id)
+    slots = sorted(i["slot"] for i in after if i["slot"] is not None)
+    ok = (len(after) == expected_count
+          and slots == list(range(1, expected_count + 1)))
+    return {"ok": ok, "count": len(after), "expected": expected_count,
+            "slots": slots}
+
+
+@app.post("/api/idosell/products/<int:product_id>/execute")
+def idosell_product_execute(product_id):
+    """Wykonuje plan W SKLEPIE: backup na dysk, PUT galerii w sloty 1..N
+    (bez okna z pusta galeria), kasowanie nadmiarowych slotow, weryfikacja
+    GET-em. Wymaga jawnego confirm z UI (drugi stopien potwierdzenia)."""
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"error": "Brak potwierdzenia"}), 400
+    try:
+        preview = build_ido_plan_preview(product_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    if not preview["ready"]:
+        return jsonify({"error": "Nie wszystkie zdjecia z planu sa obrobione"}), 409
+    if preview["final_count"] == 0:
+        return jsonify({"error": "Plan usunalby wszystkie zdjecia produktu"}), 409
+
+    plan = load_ido_plan(product_id)
+    try:
+        # 1) swiezy stan galerii + kontrola czy plan nie jest przeterminowany
+        current = idosell_client.get_product_images(product_id)
+        current_ids = {i["id"] for i in current}
+        plan_ids = {d.get("image_id") for d in plan["decisions"]
+                    if d.get("image_id")}
+        missing = plan_ids - current_ids
+        if missing:
+            return jsonify({"error":
+                f"Galeria w sklepie zmienila sie od zapisania planu "
+                f"(brak zdjec: {', '.join(sorted(missing))}) - "
+                f"otworz produkt i zapisz plan ponownie"}), 409
+
+        # 2) fizyczny backup wszystkich aktualnych zdjec na dysk
+        backup = ido_backup_gallery(product_id, current)
+
+        # 3) finalna galeria wg kolejnosci planu (base64)
+        images_b64 = []
+        uploaded = 0
+        for item in preview["items"]:
+            if item["action"] == "delete":
+                continue
+            if item["action"] == "process":
+                data = (DONE_DIR / item["local"]).read_bytes()
+                uploaded += 1
+            else:  # keep - bajty ze swiezego backupu
+                entry = next((b for b in backup
+                              if b["id"] == item["image_id"]), None)
+                if entry is None:
+                    return jsonify({"error":
+                        f"Zdjecie {item['image_id']} (Zostaw) zniknelo "
+                        f"ze sklepu - zapisz plan ponownie"}), 409
+                data = (ORIGINALS_DIR / entry["file"]).read_bytes()
+            images_b64.append(base64.b64encode(data).decode())
+
+        final_count = len(images_b64)
+        leftover = [i["id"] for i in current
+                    if i["slot"] is None or i["slot"] > final_count]
+        ido_audit("execute_attempt", product_id, {
+            "put_count": final_count, "uploaded": uploaded,
+            "current_count": len(current), "delete_after": leftover,
+            "apply_macro": preview["apply_macro"],
+        })
+
+        # 4) PUT slotow 1..N - nadpisuje istniejace, galeria nigdy nie jest pusta
+        idosell_client.put_product_images(product_id, images_b64)
+        # 5) kasowanie slotow powyzej N
+        idosell_client.delete_product_images(product_id, leftover)
+        # 6) weryfikacja GET-em
+        verify = ido_verify_gallery(product_id, final_count)
+    except idosell_client.IdoSellError as e:
+        ido_audit("execute_error", product_id, {"error": str(e)})
+        return jsonify({"error": str(e)}), 502
+
+    plan["backup_images"] = backup
+    plan["executed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    plan["verified"] = verify
+    save_ido_plan(product_id, plan)
+    ido_audit("execute_plan", product_id, {
+        "uploaded": uploaded,
+        "kept": sum(1 for i in preview["items"] if i["action"] == "keep"),
+        "deleted": len(leftover),
+        "final_count": final_count,
+        "backup_count": len(backup),
+        "verified": verify,
+    })
+    return jsonify({"ok": True, "uploaded": uploaded,
+                    "final_count": final_count, "verify": verify,
+                    "executed_at": plan["executed_at"]})
+
+
+@app.post("/api/idosell/products/<int:product_id>/rollback")
+def idosell_product_rollback(product_id):
+    """Przywraca galerie z fizycznego backupu na dysku."""
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"error": "Brak potwierdzenia"}), 400
+    try:
+        plan = load_ido_plan(product_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    backup = plan.get("backup_images")
+    if not backup:
+        return jsonify({"error": "Brak backupu - plan nie byl wykonany"}), 409
+    try:
+        images_b64 = []
+        for entry in backup:
+            path = ORIGINALS_DIR / entry["file"]
+            if not path.exists():
+                return jsonify({"error":
+                    f"Brak pliku backupu {entry['file']}"}), 409
+            images_b64.append(base64.b64encode(path.read_bytes()).decode())
+
+        restored = len(images_b64)
+        ido_audit("rollback_attempt", product_id, {"restore_count": restored})
+        idosell_client.put_product_images(product_id, images_b64)
+        current = idosell_client.get_product_images(product_id)
+        leftover = [i["id"] for i in current
+                    if i["slot"] is None or i["slot"] > restored]
+        idosell_client.delete_product_images(product_id, leftover)
+        verify = ido_verify_gallery(product_id, restored)
+    except idosell_client.IdoSellError as e:
+        ido_audit("rollback_error", product_id, {"error": str(e)})
+        return jsonify({"error": str(e)}), 502
+    plan["rolled_back_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    plan["verified"] = verify
+    save_ido_plan(product_id, plan)
+    ido_audit("rollback", product_id,
+              {"restored_count": restored, "verified": verify})
+    return jsonify({"ok": True, "restored": restored, "verify": verify})
 
 
 class QuietPollingFilter(logging.Filter):

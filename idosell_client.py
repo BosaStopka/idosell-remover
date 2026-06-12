@@ -59,8 +59,8 @@ def archive_tag_value_id() -> int:
     return int(cfg.get("archive_tag_value_id", DEFAULT_ARCHIVE_TAG_VALUE_ID))
 
 
-def _post(path: str, params: dict) -> dict:
-    """POST z throttlingiem i retry przy 429. Zwraca zdekodowany JSON.
+def _request(method: str, path: str, params, timeout: int = TIMEOUT) -> dict:
+    """Zadanie z throttlingiem i retry przy 429. Zwraca zdekodowany JSON.
 
     207 Multi-Status nie jest bledem calosci (search zwraca 207 m.in.
     przy pustym wyniku) - decyzja nalezy do wywolujacego.
@@ -77,7 +77,8 @@ def _post(path: str, params: dict) -> dict:
             time.sleep(wait)
         _last_request = time.time()
 
-        resp = requests.post(
+        resp = requests.request(
+            method,
             url,
             headers={
                 "X-API-KEY": cfg["api_key"],
@@ -85,7 +86,7 @@ def _post(path: str, params: dict) -> dict:
                 "Accept": "application/json",
             },
             json={"params": params},
-            timeout=TIMEOUT,
+            timeout=timeout,
         )
         if resp.status_code == 429:
             retry_after = resp.headers.get("Retry-After")
@@ -104,6 +105,10 @@ def _post(path: str, params: dict) -> dict:
             raise IdoSellError(f"Nieoczekiwany ksztalt odpowiedzi: {str(data)[:300]}")
         return data
     raise IdoSellError("Rate limit (429) - wyczerpano proby")
+
+
+def _post(path: str, params, timeout: int = TIMEOUT) -> dict:
+    return _request("POST", path, params, timeout)
 
 
 def search_products(params: dict) -> dict:
@@ -286,3 +291,83 @@ def download_image(url: str) -> bytes:
     if resp.status_code != 200:
         raise IdoSellError(f"Nie udalo sie pobrac zdjecia ({resp.status_code})")
     return resp.content
+
+
+# ---------------- FAZA 2: zapis (tylko zdjecia produktow) ----------------
+# Wywolywane WYLACZNIE z endpointow UI po dwustopniowym potwierdzeniu.
+# Przed kazdym uzyciem app.py robi fizyczny backup aktualnych zdjec.
+
+def _collect_faults(node, where: str = "") -> list[str]:
+    """Rekurencyjnie zbiera errors/faultString z odpowiedzi zapisu -
+    207 Multi-Status wymaga sprawdzenia per element, nie tylko HTTP."""
+    faults = []
+    if isinstance(node, dict):
+        err = node.get("errors")
+        if isinstance(err, dict) and err.get("faultCode") not in (None, 0):
+            slot = node.get("productImageNumber")
+            ctx = f"{where} slot {slot}" if slot else where
+            faults.append(f"{ctx}: [{err.get('faultCode')}] "
+                          f"{err.get('faultString', '')}".strip())
+        for key, val in node.items():
+            if key != "errors":
+                faults.extend(_collect_faults(val, where))
+    elif isinstance(node, list):
+        for item in node:
+            faults.extend(_collect_faults(item, where))
+    return faults
+
+
+def apply_macro_setting() -> bool:
+    """Czy IdoSell ma przetwarzac wgrywane zdjecia swoim makrem.
+    Domyslnie False - wgrywamy gotowe kadry 1:1."""
+    cfg = load_config() or {}
+    return bool(cfg.get("apply_macro", False))
+
+
+def put_product_images(product_id: int, images_b64: list[str],
+                       shop_id: int = 1) -> dict:
+    """Wgrywa galerie per slot: zdjecie i-te -> productImageNumber i.
+    Nadpisuje istniejace sloty, nie kasuje slotow powyzej len(images_b64)
+    (to robi delete_product_images). Rzuca IdoSellError przy bledzie
+    ktoregokolwiek zdjecia (207)."""
+    if not images_b64:
+        raise IdoSellError("Pusta lista zdjec do wgrania")
+    params = {
+        "productsImagesSettings": {
+            "productsImagesSourceType": "base64",
+            "productsImagesApplyMacro": apply_macro_setting(),
+        },
+        "productsImages": [{
+            "productIdent": {"productIdentType": "id",
+                             "identValue": str(product_id)},
+            "shopId": shop_id,
+            "productImages": [{
+                "productImageSource": b64,
+                "productImageNumber": i,
+                "productImagePriority": i,
+                "deleteProductImage": False,
+            } for i, b64 in enumerate(images_b64, 1)],
+        }],
+    }
+    data = _request("PUT", "/products/images", params, timeout=300)
+    faults = _collect_faults(data, f"produkt {product_id}")
+    if faults:
+        raise IdoSellError("PUT zdjec: " + "; ".join(faults)[:500])
+    return data
+
+
+def delete_product_images(product_id: int, image_ids: list[str],
+                          shop_id: int = 1) -> dict:
+    """Kasuje wskazane zdjecia (productImageId z searcha, np. '334_5.jpg')."""
+    if not image_ids:
+        return {}
+    data = _post("/products/images/delete", [{
+        "productId": int(product_id),
+        "shopId": shop_id,
+        "productImagesId": list(image_ids),
+        "deleteAll": False,
+    }])
+    faults = _collect_faults(data, f"produkt {product_id}")
+    if faults:
+        raise IdoSellError("Kasowanie zdjec: " + "; ".join(faults)[:500])
+    return data
