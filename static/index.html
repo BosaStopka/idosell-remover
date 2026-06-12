@@ -218,6 +218,16 @@
     display: flex; align-items: center; justify-content: center; gap: 6px;
     padding: 5px 0; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted);
   }
+  .icon-row { display: flex; border-top: 1px solid var(--border); }
+  .icon-row button {
+    flex: 1; padding: 6px 0; font-size: 10.5px; border: none; cursor: pointer;
+    background: var(--panel2); color: var(--muted);
+  }
+  .icon-row button.on { background: rgba(255,209,102,.18); color: #ffd166; font-weight: 700; }
+  .grp-toggle {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 2px 10px; cursor: pointer; font-size: 12px;
+  }
   .order-row button {
     background: var(--panel); border: 1px solid var(--border); color: var(--text);
     border-radius: 6px; padding: 2px 9px; cursor: pointer; font-size: 11px;
@@ -630,6 +640,13 @@ const STATUS = {
   error: ["Błąd", "error"],
 };
 
+const collapsedGroups = new Set();
+function toggleGroup(pid) {
+  if (collapsedGroups.has(pid)) collapsedGroups.delete(pid);
+  else collapsedGroups.add(pid);
+  render();
+}
+
 function render() {
   goBtn.disabled = !pending.length;
   goBtn.textContent = pending.length ? `Przetwórz (${pending.length})` : "Przetwórz - dodaj zdjęcia";
@@ -660,12 +677,17 @@ function render() {
     const doneCount = gjobs.filter(j => j.status === "done").length;
     const isAllegro = gjobs.some(j => j.source === "allegro");
     const isIdo = gjobs.some(j => j.source === "idosell");
+    const collapsed = collapsedGroups.has(pid);
+    const allDone = doneCount === gjobs.length;
     html += `<div class="group-head">
+      <button class="grp-toggle" onclick="toggleGroup('${esc(pid)}')" title="Zwiń / rozwiń">${collapsed ? "▸" : "▾"}</button>
       <h3>📁 ${esc(pid)}</h3>
       <span class="badge">${doneCount}/${gjobs.length} gotowych</span>
       ${isAllegro ? `<span class="badge allegro">Allegro</span>` : ""}
       ${isIdo ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">IdoSell</span>` : ""}
+      ${isIdo ? `<button class="btn btn-ghost" style="margin-left:auto;padding:6px 12px;font-size:12px" ${allDone ? "" : "disabled title='Najpierw dokończ obróbkę'"} onclick="openIdoPlan('${esc(pid)}')">📤 Wyślij do IdoSell</button>` : ""}
     </div>`;
+    if (collapsed) continue;
     for (const j of gjobs) {
       const [label, cls] = STATUS[j.status] || [j.status, ""];
       let thumb = `<div class="spin"></div>`;
@@ -873,13 +895,39 @@ function renderPick() {
         <button class="keep ${it.action === "keep" ? "on" : ""}" onclick="setPick(${i},'keep')">Zostaw</button>
         <button class="delete ${it.action === "delete" ? "on" : ""}" onclick="setPick(${i},'delete')">Usuń</button>
       </div>
+      ${pickState.source === "idosell" ? `<div class="icon-row" title="Przypnij zdjęcie do slotu panelu IdoSell">
+        <button class="${(it.icons || []).includes("shop") ? "on" : ""}" onclick="toggleIcon(${i},'shop')">Lista</button>
+        <button class="${(it.icons || []).includes("group") ? "on" : ""}" onclick="toggleIcon(${i},'group')">Grupa</button>
+        <button class="${(it.icons || []).includes("auction") ? "on" : ""}" onclick="toggleIcon(${i},'auction')">Bez tła</button>
+      </div>` : ""}
     </div>`).join("");
   const c = a => pickState.items.filter(x => x.action === a).length;
+  let iconInfo = "";
+  if (pickState.source === "idosell") {
+    const IC = { shop: "Lista", group: "Grupa", auction: "Bez tła" };
+    const parts = Object.entries(IC).map(([t, lbl]) => {
+      const idx = pickState.items.findIndex(x => (x.icons || []).includes(t));
+      return `${lbl}: ${idx >= 0 ? "#" + (idx + 1) : "-"}`;
+    });
+    iconInfo = ` · ${parts.join(" ")}`;
+  }
   $("pickSummary").textContent =
-    `Obróbka: ${c("process")} · Zostaw: ${c("keep")} · Do usunięcia: ${c("delete")} · kolejność = galeria`;
+    `Obróbka: ${c("process")} · Zostaw: ${c("keep")} · Do usunięcia: ${c("delete")}${iconInfo} · kolejność = galeria`;
   $("pickGo").disabled = !pickState.items.length;
 }
-function setPick(i, action) { pickState.items[i].action = action; renderPick(); }
+function setPick(i, action) {
+  pickState.items[i].action = action;
+  if (action === "delete") pickState.items[i].icons = [];
+  renderPick();
+}
+function toggleIcon(i, t) {
+  const items = pickState.items;
+  if (items[i].action === "delete") { alert("Zdjęcie oznaczone do usunięcia nie może być ikoną"); return; }
+  const had = (items[i].icons || []).includes(t);
+  for (const x of items) x.icons = (x.icons || []).filter(y => y !== t);
+  if (!had) items[i].icons.push(t);
+  renderPick();
+}
 function movePick(i, d) {
   const items = pickState.items;
   const j = i + d;
@@ -1002,13 +1050,17 @@ async function openIdoPlan(productId) {
   planData = plan;
 
   const LBL = { process: ["✨ obrobione", "var(--accent2)"], keep: ["bez zmian", "var(--muted)"], delete: ["🗑 usunięte", "var(--err)"] };
+  const IC = { shop: "Lista", group: "Grupa", auction: "Bez tła" };
   let html = `<div class="pick-grid">`;
   for (const it of plan.items) {
     const [lbl, color] = LBL[it.action];
     const src = it.action === "process"
       ? (it.local ? `/done/${it.local}` : null) : it.url;
+    const icons = (it.icons || []).map(t => IC[t]).join(" + ");
     html += `<div class="pick" style="border-color:${color}">
-      <div class="thumb">${src ? `<img src="${esc(src)}" loading="lazy">` : `<div class="spin"></div>`}</div>
+      <div class="thumb">${src ? `<img src="${esc(src)}" loading="lazy">` : `<div class="spin"></div>`}
+        ${icons ? `<span class="main-tag">📌 ${icons}</span>` : ""}
+      </div>
       <div style="padding:8px;text-align:center;font-size:12px;color:${color}">
         ${it.index}. ${lbl}${it.action === "process" && !it.local ? " (czeka na obróbkę)" : ""}
       </div></div>`;
@@ -1035,6 +1087,10 @@ function renderIdoConfirm() {
   const del = planData.items.filter(i => i.action === "delete");
   const keep = planData.items.filter(i => i.action === "keep");
   const upKb = up.reduce((s, i) => s + (i.size_kb || 0), 0);
+  const IC = { shop: "Lista", group: "Grupa", auction: "Bez tła" };
+  const iconParts = planData.items
+    .filter(i => (i.icons || []).length && i.action !== "delete")
+    .map(i => `${(i.icons || []).map(t => IC[t]).join("+")} ← zdjęcie #${i.index}`);
   $("planGo").classList.add("hidden");
   $("planBody").innerHTML = `
     <div class="allegro-note" style="border-color:var(--err)">
@@ -1043,16 +1099,19 @@ function renderIdoConfirm() {
       ponownie wgrane bez zmian: <b>${keep.length}</b> ·
       usunięte: <b style="color:var(--err)">${del.length}</b> ·
       finalnie galeria będzie miała <b>${planData.final_count} zdjęć</b>.<br>
-      Kolejność: backup oryginałów na dysk → PUT slotów 1..${planData.final_count} → usunięcie nadmiarowych → weryfikacja GET-em.
+      Ikony panelu: ${iconParts.length ? `<b style="color:#ffd166">${iconParts.join(" · ")}</b>` : "bez zmian"}.<br>
+      Kolejność: backup oryginałów i ikon na dysk → PUT slotów 1..${planData.final_count} + ikony → usunięcie nadmiarowych → weryfikacja GET-em.
       ${planData.apply_macro ? `<br><b style="color:#ff8a3d">Uwaga: apply_macro=true - IdoSell przetworzy zdjęcia swoim makrem.</b>` : ""}
     </div>
     <details>
       <summary>Pokaż dokładną listę operacji (${planData.items.length} pozycji)</summary>
       <div style="font-size:12.5px;line-height:1.9;font-family:monospace;background:var(--panel2);padding:12px;border-radius:8px;margin-top:8px">
         ${planData.items.map(i => {
-          if (i.action === "process") return `slot ${i.index}. WGRAJ &nbsp;done/${esc(i.local)} (${i.size_kb} KB)`;
+          const ic = (i.icons || []).length && i.action !== "delete"
+            ? ` <span style="color:#ffd166">[📌 ${(i.icons || []).map(t => IC[t]).join("+")}]</span>` : "";
+          if (i.action === "process") return `slot ${i.index}. WGRAJ &nbsp;done/${esc(i.local)} (${i.size_kb} KB)${ic}`;
           if (i.action === "delete") return `<span style="color:var(--err)">USUŃ</span> &nbsp;${esc(i.image_id || (i.url||"").slice(-40))}`;
-          return `slot ${i.index}. ZOSTAW ${esc(i.image_id || (i.url||"").slice(-40))} (ponowny upload z backupu)`;
+          return `slot ${i.index}. ZOSTAW ${esc(i.image_id || (i.url||"").slice(-40))} (ponowny upload z backupu)${ic}`;
         }).join("<br>")}
       </div>
     </details>
@@ -1081,11 +1140,17 @@ async function executeIdoPlan() {
     return;
   }
   const v = data.verify || {};
+  const IC = { shop: "Lista", group: "Grupa", auction: "Bez tła" };
+  const iconsLine = (data.icons_set || []).length
+    ? `<p style="font-size:13px;margin-top:4px;color:${v.icons_ok === false ? "var(--err)" : "var(--ok)"}">
+        Ikony panelu (${data.icons_set.map(t => IC[t]).join(", ")}): ${v.icons_ok === false ? `⚠ brak: ${(v.icons_missing||[]).map(t => IC[t]).join(", ")}` : "✓ ustawione"}
+      </p>` : "";
   $("planBody").innerHTML = `
     <p style="color:var(--ok);font-size:15px">✅ Wykonano: wgrano ${data.uploaded} obrobionych, galeria ma ${data.final_count} zdjęć.</p>
     <p style="font-size:13px;margin-top:8px;color:${v.ok ? "var(--ok)" : "var(--err)"}">
       Weryfikacja GET-em: ${v.ok ? `✓ zgodna (${v.count} zdjęć, sloty 1..${v.expected})` : `⚠ NIEZGODNA - w sklepie ${v.count} zdjęć, oczekiwano ${v.expected} (sloty: ${(v.slots||[]).join(",")})`}
     </p>
+    ${iconsLine}
     <p style="font-size:12.5px;color:var(--muted);margin-top:8px">Backup: originals/idosell/${esc(planOfferId)}/ · dziennik: idosell_audit.jsonl</p>
     <button class="btn btn-ghost" style="margin-top:14px" onclick="rollbackIdoPlan()">↩ Przywróć poprzednią galerię (rollback)</button>`;
   loadIdoProducts(true);
@@ -1333,6 +1398,8 @@ async function processIdoProduct(id, btn) {
       action: (data.suggestions || [])[i] || "process",
       suggested: (data.suggestions || [])[i] === "keep",
       index: i + 1,
+      // domyslnie zdjecie nr 1 idzie na liste towarow i do grupy
+      icons: i === 0 ? ["shop", "group"] : [],
     })),
     btn,
   };

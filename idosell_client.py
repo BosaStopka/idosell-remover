@@ -293,6 +293,52 @@ def download_image(url: str) -> bytes:
     return resp.content
 
 
+ICON_TYPES = ("shop", "auction", "group")
+# shop = zdjecie na liscie towarow, group = dla towaru w grupie,
+# auction = "zdjecie bez tla" (panel: 3 sloty nad galeria)
+
+_ICON_FIELDS = {"shop": "productIcon", "auction": "productAuctionIcon",
+                "group": "productGroupIcon"}
+
+
+def get_product_icons(product_id: int) -> dict:
+    """Stan 3 ikon produktu przez GET /products/products (search zwraca
+    tylko ikone 'shop'). Zwraca {typ: {"exists": bool, "url": str|None}}."""
+    global _last_request
+    cfg = load_config()
+    if not cfg:
+        raise IdoSellError("Brak konfiguracji (idosell_config.json)")
+    base = cfg.get("base_url", DEFAULT_BASE_URL)
+    wait = MIN_INTERVAL - (time.time() - _last_request)
+    if wait > 0:
+        time.sleep(wait)
+    _last_request = time.time()
+    resp = requests.get(
+        f"{base}/products/products",
+        headers={"X-API-KEY": cfg["api_key"], "Accept": "application/json"},
+        params={"productIds": str(product_id)},
+        timeout=TIMEOUT,
+    )
+    if resp.status_code not in (200, 207):
+        raise IdoSellError(f"GET products {resp.status_code}: {resp.text[:300]}")
+    results = (resp.json() or {}).get("results") or []
+    if not results:
+        raise IdoSellError(f"Nie znaleziono produktu {product_id}")
+    prod = results[0]
+    # domena sklepu do URL-i wzglednych (ikony auction/group przychodza
+    # bez "https://domena/")
+    origin = base.split("/api/")[0]
+    out = {}
+    for typ, field in _ICON_FIELDS.items():
+        node = prod.get(field) or {}
+        exists = node.get(field + "Exists") == "y"
+        url = node.get(field + "LargeUrl")
+        if url and not url.startswith("http"):
+            url = f"{origin}/{url.lstrip('/')}"
+        out[typ] = {"exists": exists, "url": url if exists else None}
+    return out
+
+
 # ---------------- FAZA 2: zapis (tylko zdjecia produktow) ----------------
 # Wywolywane WYLACZNIE z endpointow UI po dwustopniowym potwierdzeniu.
 # Przed kazdym uzyciem app.py robi fizyczny backup aktualnych zdjec.
@@ -325,13 +371,51 @@ def apply_macro_setting() -> bool:
 
 
 def put_product_images(product_id: int, images_b64: list[str],
-                       shop_id: int = 1) -> dict:
+                       shop_id: int = 1,
+                       icons_b64: dict | None = None) -> dict:
     """Wgrywa galerie per slot: zdjecie i-te -> productImageNumber i.
     Nadpisuje istniejace sloty, nie kasuje slotow powyzej len(images_b64)
-    (to robi delete_product_images). Rzuca IdoSellError przy bledzie
-    ktoregokolwiek zdjecia (207)."""
+    (to robi delete_product_images). icons_b64: {typ z ICON_TYPES: base64}
+    - ustawia ikony produktu w tym samym wywolaniu. Rzuca IdoSellError
+    przy bledzie ktoregokolwiek zdjecia (207)."""
     if not images_b64:
         raise IdoSellError("Pusta lista zdjec do wgrania")
+    entry = {
+        "productIdent": {"productIdentType": "id",
+                         "identValue": str(product_id)},
+        "shopId": shop_id,
+        "productImages": [{
+            "productImageSource": b64,
+            "productImageNumber": i,
+            "productImagePriority": i,
+            "deleteProductImage": False,
+        } for i, b64 in enumerate(images_b64, 1)],
+    }
+    if icons_b64:
+        entry["productIcons"] = [{
+            "productIconSource": b64,
+            "productIconType": typ,
+            "deleteProductIcon": False,
+        } for typ, b64 in icons_b64.items() if typ in ICON_TYPES]
+    params = {
+        "productsImagesSettings": {
+            "productsImagesSourceType": "base64",
+            "productsImagesApplyMacro": apply_macro_setting(),
+        },
+        "productsImages": [entry],
+    }
+    data = _request("PUT", "/products/images", params, timeout=300)
+    faults = _collect_faults(data, f"produkt {product_id}")
+    if faults:
+        raise IdoSellError("PUT zdjec: " + "; ".join(faults)[:500])
+    return data
+
+
+def delete_product_icon(product_id: int, icon_type: str,
+                        shop_id: int = 1) -> dict:
+    """Usuwa jedna z 3 ikon produktu (rollback ikony, ktorej nie bylo)."""
+    if icon_type not in ICON_TYPES:
+        raise IdoSellError(f"Nieznany typ ikony: {icon_type}")
     params = {
         "productsImagesSettings": {
             "productsImagesSourceType": "base64",
@@ -341,18 +425,16 @@ def put_product_images(product_id: int, images_b64: list[str],
             "productIdent": {"productIdentType": "id",
                              "identValue": str(product_id)},
             "shopId": shop_id,
-            "productImages": [{
-                "productImageSource": b64,
-                "productImageNumber": i,
-                "productImagePriority": i,
-                "deleteProductImage": False,
-            } for i, b64 in enumerate(images_b64, 1)],
+            "productIcons": [{
+                "productIconType": icon_type,
+                "deleteProductIcon": True,
+            }],
         }],
     }
-    data = _request("PUT", "/products/images", params, timeout=300)
+    data = _request("PUT", "/products/images", params, timeout=60)
     faults = _collect_faults(data, f"produkt {product_id}")
     if faults:
-        raise IdoSellError("PUT zdjec: " + "; ".join(faults)[:500])
+        raise IdoSellError("Kasowanie ikony: " + "; ".join(faults)[:500])
     return data
 
 

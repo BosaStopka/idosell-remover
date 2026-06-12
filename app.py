@@ -1229,12 +1229,15 @@ def idosell_product_process(product_id):
         "source": "idosell",
         "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         # kolejnosc listy = docelowa kolejnosc galerii; "index" = oryginalna
-        # pozycja (nazwy plikow), image_id/slot -> potrzebne w fazie 2
+        # pozycja (nazwy plikow), image_id/slot -> potrzebne w fazie 2,
+        # icons -> przypiecie zdjecia do slotow lista/grupa/bez tla
         "decisions": [{"index": d.get("index", i + 1),
                        "image_id": d.get("image_id"),
                        "slot": d.get("slot"),
                        "url": d["url"],
-                       "action": d["action"]}
+                       "action": d["action"],
+                       "icons": [t for t in (d.get("icons") or [])
+                                 if t in idosell_client.ICON_TYPES]}
                       for i, d in enumerate(decisions)],
     }
     (out_dir / "plan.json").write_text(
@@ -1306,7 +1309,8 @@ def build_ido_plan_preview(product_id: int) -> dict:
     ready = True
     for d in plan["decisions"]:
         item = {"index": d["index"], "action": d["action"], "url": d["url"],
-                "image_id": d.get("image_id"), "slot": d.get("slot")}
+                "image_id": d.get("image_id"), "slot": d.get("slot"),
+                "icons": d.get("icons") or []}
         if d["action"] == "process":
             rel = f"{product_id}/{product_id}_{d['index']}.jpg"
             path = DONE_DIR / rel
@@ -1353,14 +1357,42 @@ def ido_backup_gallery(product_id: int, current: list[dict]) -> list[dict]:
     return backup
 
 
-def ido_verify_gallery(product_id: int, expected_count: int) -> dict:
-    """Weryfikacja GET-em po zapisie: liczba zdjec i ciaglosc slotow."""
+def ido_backup_icons(product_id: int) -> list[dict]:
+    """Backup 3 ikon produktu (lista/grupa/bez tla) na dysk. Zapamietuje
+    tez, ktorych ikon NIE bylo (rollback wtedy je skasuje)."""
+    backup_dir = IDO_ORIGINALS_DIR / str(product_id)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    state = idosell_client.get_product_icons(product_id)
+    backup = []
+    for typ, info in state.items():
+        entry = {"type": typ, "existed": info["exists"], "file": None}
+        if info["exists"] and info["url"]:
+            ext = ".webp" if ".webp" in info["url"] else ".jpg"
+            fname = f"icon_{typ}{ext}"
+            (backup_dir / fname).write_bytes(
+                idosell_client.download_image(info["url"]))
+            entry["file"] = f"idosell/{product_id}/{fname}"
+        backup.append(entry)
+    return backup
+
+
+def ido_verify_gallery(product_id: int, expected_count: int,
+                       expected_icons: list | None = None) -> dict:
+    """Weryfikacja GET-em po zapisie: liczba zdjec, ciaglosc slotow,
+    obecnosc przypietych ikon."""
     after = idosell_client.get_product_images(product_id)
     slots = sorted(i["slot"] for i in after if i["slot"] is not None)
     ok = (len(after) == expected_count
           and slots == list(range(1, expected_count + 1)))
-    return {"ok": ok, "count": len(after), "expected": expected_count,
-            "slots": slots}
+    out = {"ok": ok, "count": len(after), "expected": expected_count,
+           "slots": slots}
+    if expected_icons:
+        state = idosell_client.get_product_icons(product_id)
+        missing = [t for t in expected_icons if not state[t]["exists"]]
+        out["icons_ok"] = not missing
+        out["icons_missing"] = missing
+        out["ok"] = out["ok"] and not missing
+    return out
 
 
 @app.post("/api/idosell/products/<int:product_id>/execute")
@@ -1394,11 +1426,13 @@ def idosell_product_execute(product_id):
                 f"(brak zdjec: {', '.join(sorted(missing))}) - "
                 f"otworz produkt i zapisz plan ponownie"}), 409
 
-        # 2) fizyczny backup wszystkich aktualnych zdjec na dysk
+        # 2) fizyczny backup aktualnych zdjec + 3 ikon na dysk
         backup = ido_backup_gallery(product_id, current)
+        backup_icons = ido_backup_icons(product_id)
 
         # 3) finalna galeria wg kolejnosci planu (base64)
         images_b64 = []
+        item_b64 = {}  # index decyzji -> base64 (do przypiec ikon)
         uploaded = 0
         for item in preview["items"]:
             if item["action"] == "delete":
@@ -1414,7 +1448,17 @@ def idosell_product_execute(product_id):
                         f"Zdjecie {item['image_id']} (Zostaw) zniknelo "
                         f"ze sklepu - zapisz plan ponownie"}), 409
                 data = (ORIGINALS_DIR / entry["file"]).read_bytes()
-            images_b64.append(base64.b64encode(data).decode())
+            b64 = base64.b64encode(data).decode()
+            images_b64.append(b64)
+            item_b64[item["index"]] = b64
+
+        # przypiecia ikon: te same bajty co zdjecie z galerii
+        icons_b64 = {}
+        for item in preview["items"]:
+            if item["action"] == "delete":
+                continue
+            for typ in item.get("icons") or []:
+                icons_b64[typ] = item_b64[item["index"]]
 
         final_count = len(images_b64)
         leftover = [i["id"] for i in current
@@ -1422,20 +1466,23 @@ def idosell_product_execute(product_id):
         ido_audit("execute_attempt", product_id, {
             "put_count": final_count, "uploaded": uploaded,
             "current_count": len(current), "delete_after": leftover,
-            "apply_macro": preview["apply_macro"],
+            "icons": sorted(icons_b64), "apply_macro": preview["apply_macro"],
         })
 
-        # 4) PUT slotow 1..N - nadpisuje istniejace, galeria nigdy nie jest pusta
-        idosell_client.put_product_images(product_id, images_b64)
+        # 4) PUT slotow 1..N + ikony - galeria nigdy nie jest pusta
+        idosell_client.put_product_images(product_id, images_b64,
+                                          icons_b64=icons_b64 or None)
         # 5) kasowanie slotow powyzej N
         idosell_client.delete_product_images(product_id, leftover)
-        # 6) weryfikacja GET-em
-        verify = ido_verify_gallery(product_id, final_count)
+        # 6) weryfikacja GET-em (galeria + ikony)
+        verify = ido_verify_gallery(product_id, final_count,
+                                    expected_icons=sorted(icons_b64))
     except idosell_client.IdoSellError as e:
         ido_audit("execute_error", product_id, {"error": str(e)})
         return jsonify({"error": str(e)}), 502
 
     plan["backup_images"] = backup
+    plan["backup_icons"] = backup_icons
     plan["executed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     plan["verified"] = verify
     save_ido_plan(product_id, plan)
@@ -1443,12 +1490,14 @@ def idosell_product_execute(product_id):
         "uploaded": uploaded,
         "kept": sum(1 for i in preview["items"] if i["action"] == "keep"),
         "deleted": len(leftover),
+        "icons": sorted(icons_b64),
         "final_count": final_count,
         "backup_count": len(backup),
         "verified": verify,
     })
     return jsonify({"ok": True, "uploaded": uploaded,
                     "final_count": final_count, "verify": verify,
+                    "icons_set": sorted(icons_b64),
                     "executed_at": plan["executed_at"]})
 
 
@@ -1474,14 +1523,39 @@ def idosell_product_rollback(product_id):
                     f"Brak pliku backupu {entry['file']}"}), 409
             images_b64.append(base64.b64encode(path.read_bytes()).decode())
 
+        # ikony: byly -> przywroc z backupu; nie bylo -> skasuj nasza
+        icons_restore = {}
+        icons_to_delete = []
+        for entry in plan.get("backup_icons") or []:
+            if entry["existed"] and entry.get("file"):
+                path = ORIGINALS_DIR / entry["file"]
+                if not path.exists():
+                    return jsonify({"error":
+                        f"Brak pliku backupu ikony {entry['file']}"}), 409
+                icons_restore[entry["type"]] = \
+                    base64.b64encode(path.read_bytes()).decode()
+            elif not entry["existed"]:
+                icons_to_delete.append(entry["type"])
+
         restored = len(images_b64)
-        ido_audit("rollback_attempt", product_id, {"restore_count": restored})
-        idosell_client.put_product_images(product_id, images_b64)
+        ido_audit("rollback_attempt", product_id, {
+            "restore_count": restored,
+            "icons_restore": sorted(icons_restore),
+            "icons_delete": icons_to_delete,
+        })
+        idosell_client.put_product_images(product_id, images_b64,
+                                          icons_b64=icons_restore or None)
         current = idosell_client.get_product_images(product_id)
         leftover = [i["id"] for i in current
                     if i["slot"] is None or i["slot"] > restored]
         idosell_client.delete_product_images(product_id, leftover)
-        verify = ido_verify_gallery(product_id, restored)
+        if icons_to_delete:
+            state = idosell_client.get_product_icons(product_id)
+            for typ in icons_to_delete:
+                if state[typ]["exists"]:
+                    idosell_client.delete_product_icon(product_id, typ)
+        verify = ido_verify_gallery(product_id, restored,
+                                    expected_icons=sorted(icons_restore))
     except idosell_client.IdoSellError as e:
         ido_audit("rollback_error", product_id, {"error": str(e)})
         return jsonify({"error": str(e)}), 502
