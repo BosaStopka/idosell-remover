@@ -1469,12 +1469,15 @@ def idosell_product_execute(product_id):
             "icons": sorted(icons_b64), "apply_macro": preview["apply_macro"],
         })
 
-        # 4) PUT slotow 1..N + ikony - galeria nigdy nie jest pusta
-        idosell_client.put_product_images(product_id, images_b64,
-                                          icons_b64=icons_b64 or None)
+        # 4) PUT slotow 1..N - galeria nigdy nie jest pusta
+        idosell_client.put_product_images(product_id, images_b64)
         # 5) kasowanie slotow powyzej N
         idosell_client.delete_product_images(product_id, leftover)
-        # 6) weryfikacja GET-em (galeria + ikony)
+        # 6) ikony OSOBNYM wywolaniem po galerii (dedupe do referencji
+        #    na plik slotu - w jednym PUT z podmiana galerii ikona znika)
+        if icons_b64:
+            idosell_client.set_product_icons(product_id, icons_b64)
+        # 7) weryfikacja GET-em (galeria + ikony)
         verify = ido_verify_gallery(product_id, final_count,
                                     expected_icons=sorted(icons_b64))
     except idosell_client.IdoSellError as e:
@@ -1543,12 +1546,13 @@ def idosell_product_rollback(product_id):
             "icons_restore": sorted(icons_restore),
             "icons_delete": icons_to_delete,
         })
-        idosell_client.put_product_images(product_id, images_b64,
-                                          icons_b64=icons_restore or None)
+        idosell_client.put_product_images(product_id, images_b64)
         current = idosell_client.get_product_images(product_id)
         leftover = [i["id"] for i in current
                     if i["slot"] is None or i["slot"] > restored]
         idosell_client.delete_product_images(product_id, leftover)
+        if icons_restore:
+            idosell_client.set_product_icons(product_id, icons_restore)
         if icons_to_delete:
             state = idosell_client.get_product_icons(product_id)
             for typ in icons_to_delete:

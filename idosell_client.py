@@ -371,43 +371,70 @@ def apply_macro_setting() -> bool:
 
 
 def put_product_images(product_id: int, images_b64: list[str],
-                       shop_id: int = 1,
-                       icons_b64: dict | None = None) -> dict:
+                       shop_id: int = 1) -> dict:
     """Wgrywa galerie per slot: zdjecie i-te -> productImageNumber i.
     Nadpisuje istniejace sloty, nie kasuje slotow powyzej len(images_b64)
-    (to robi delete_product_images). icons_b64: {typ z ICON_TYPES: base64}
-    - ustawia ikony produktu w tym samym wywolaniu. Rzuca IdoSellError
-    przy bledzie ktoregokolwiek zdjecia (207)."""
+    (to robi delete_product_images). Rzuca IdoSellError przy bledzie
+    ktoregokolwiek zdjecia (207).
+
+    UWAGA: ikon NIE wysylac w tym samym wywolaniu co galerie - IdoSell
+    deduplikuje ikone identyczna ze zdjeciem galerii do REFERENCJI na
+    plik slotu, a rownoczesna podmiana slotow uniewaznia referencje
+    (ikona znika; zaobserwowane na produkcie 4576, 2026-06-12).
+    Ikony ustawia set_product_icons PO zapisie galerii."""
     if not images_b64:
         raise IdoSellError("Pusta lista zdjec do wgrania")
-    entry = {
-        "productIdent": {"productIdentType": "id",
-                         "identValue": str(product_id)},
-        "shopId": shop_id,
-        "productImages": [{
-            "productImageSource": b64,
-            "productImageNumber": i,
-            "productImagePriority": i,
-            "deleteProductImage": False,
-        } for i, b64 in enumerate(images_b64, 1)],
-    }
-    if icons_b64:
-        entry["productIcons"] = [{
-            "productIconSource": b64,
-            "productIconType": typ,
-            "deleteProductIcon": False,
-        } for typ, b64 in icons_b64.items() if typ in ICON_TYPES]
     params = {
         "productsImagesSettings": {
             "productsImagesSourceType": "base64",
             "productsImagesApplyMacro": apply_macro_setting(),
         },
-        "productsImages": [entry],
+        "productsImages": [{
+            "productIdent": {"productIdentType": "id",
+                             "identValue": str(product_id)},
+            "shopId": shop_id,
+            "productImages": [{
+                "productImageSource": b64,
+                "productImageNumber": i,
+                "productImagePriority": i,
+                "deleteProductImage": False,
+            } for i, b64 in enumerate(images_b64, 1)],
+        }],
     }
     data = _request("PUT", "/products/images", params, timeout=300)
     faults = _collect_faults(data, f"produkt {product_id}")
     if faults:
         raise IdoSellError("PUT zdjec: " + "; ".join(faults)[:500])
+    return data
+
+
+def set_product_icons(product_id: int, icons_b64: dict,
+                      shop_id: int = 1) -> dict:
+    """Ustawia ikony produktu (osobnym PUT-em, po zapisie galerii).
+    icons_b64: {typ z ICON_TYPES: base64}."""
+    entries = [{
+        "productIconSource": b64,
+        "productIconType": typ,
+        "deleteProductIcon": False,
+    } for typ, b64 in icons_b64.items() if typ in ICON_TYPES]
+    if not entries:
+        return {}
+    params = {
+        "productsImagesSettings": {
+            "productsImagesSourceType": "base64",
+            "productsImagesApplyMacro": apply_macro_setting(),
+        },
+        "productsImages": [{
+            "productIdent": {"productIdentType": "id",
+                             "identValue": str(product_id)},
+            "shopId": shop_id,
+            "productIcons": entries,
+        }],
+    }
+    data = _request("PUT", "/products/images", params, timeout=120)
+    faults = _collect_faults(data, f"produkt {product_id}")
+    if faults:
+        raise IdoSellError("Ustawianie ikon: " + "; ".join(faults)[:500])
     return data
 
 
