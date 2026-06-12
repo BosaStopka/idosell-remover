@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bosa Stopka - Studio Zdjęć</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #181b25;
+    --panel2: #1f2330;
+    --border: #2a2f40;
+    --text: #e8eaf2;
+    --muted: #8b91a7;
+    --accent: #6c5ce7;
+    --accent2: #00cec9;
+    --ok: #00b894;
+    --err: #e17055;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    min-height: 100vh;
+  }
+  header {
+    padding: 18px 32px;
+    display: flex; align-items: center; gap: 14px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(135deg, rgba(108,92,231,.12), rgba(0,206,201,.06));
+  }
+  .logo {
+    width: 42px; height: 42px; border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: grid; place-items: center; font-size: 22px;
+  }
+  header h1 { font-size: 20px; font-weight: 600; }
+  header p { color: var(--muted); font-size: 13px; }
+  .tabs { margin-left: auto; display: flex; gap: 6px; }
+  .tab {
+    padding: 9px 18px; border-radius: 10px; font-size: 14px; cursor: pointer;
+    border: 1px solid transparent; color: var(--muted); background: none;
+  }
+  .tab.active {
+    color: var(--text); border-color: var(--border); background: var(--panel);
+  }
+  main {
+    max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px;
+  }
+  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 24px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+  }
+  .panel h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin-bottom: 14px;
+  }
+
+  #dropzone {
+    border: 2px dashed var(--border); border-radius: var(--radius);
+    padding: 34px 18px; text-align: center; cursor: pointer;
+    transition: border-color .2s, background .2s;
+  }
+  #dropzone.drag { border-color: var(--accent2); background: rgba(0,206,201,.06); }
+  #dropzone .big { font-size: 34px; margin-bottom: 10px; }
+  #dropzone p { color: var(--muted); font-size: 13px; line-height: 1.6; }
+  #dropzone b { color: var(--text); }
+
+  .opt-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; gap: 10px; }
+  .opt-row + .opt-row { border-top: 1px solid rgba(42,47,64,.6); }
+  .opt-row label { font-size: 14px; }
+  .opt-row small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+
+  .switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider-bg {
+    position: absolute; inset: 0; border-radius: 24px;
+    background: var(--border); transition: .2s; cursor: pointer;
+  }
+  .slider-bg:before {
+    content: ""; position: absolute; width: 18px; height: 18px;
+    border-radius: 50%; background: #fff; top: 3px; left: 3px; transition: .2s;
+  }
+  .switch input:checked + .slider-bg { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+  .switch input:checked + .slider-bg:before { transform: translateX(18px); }
+
+  select, input[type=range] { accent-color: var(--accent); }
+  select, input[type=text], input[type=password] {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; font-size: 14px;
+  }
+  .opt-row.slider-row { flex-direction: column; align-items: stretch; gap: 6px; }
+  .opt-row.slider-row label { display: flex; justify-content: space-between; }
+  .range-wrap { display: flex; align-items: center; gap: 10px; width: 100%; }
+  .range-wrap input { flex: 1; min-width: 0; }
+  .range-val { font-size: 12px; color: var(--accent2); min-width: 40px; text-align: right; flex-shrink: 0; }
+
+  details summary {
+    cursor: pointer; color: var(--muted); font-size: 13px; padding: 10px 0 4px;
+    user-select: none;
+  }
+  details[open] summary { color: var(--accent2); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    border: none; border-radius: 10px; padding: 12px 18px; font-size: 14px;
+    font-weight: 600; cursor: pointer; transition: opacity .15s, transform .1s;
+  }
+  .btn:active { transform: scale(.98); }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff;
+  }
+  .btn-primary:disabled { opacity: .35; cursor: default; }
+  .btn-ghost {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    font-size: 13px; padding: 9px 14px;
+  }
+  .w100 { width: 100%; margin-top: 16px; }
+
+  .toolbar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+
+  #cards, #allegroOffers { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .thumb {
+    aspect-ratio: 1; background:
+      repeating-conic-gradient(#20242f 0% 25%, #181b25 0% 50%) 0 0/24px 24px;
+    display: grid; place-items: center; position: relative;
+  }
+  .thumb img { width: 100%; height: 100%; object-fit: contain; }
+  .thumb.white { background: #fff; }
+  .card-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .card-name { font-size: 13px; word-break: break-word; }
+  .badge {
+    font-size: 11px; padding: 3px 10px; border-radius: 20px; width: fit-content;
+    background: var(--panel2); color: var(--muted);
+  }
+  .badge.processing { color: var(--accent2); border: 1px solid var(--accent2); }
+  .badge.done { color: var(--ok); border: 1px solid var(--ok); }
+  .badge.error { color: var(--err); border: 1px solid var(--err); }
+  .badge.queued { border: 1px solid var(--border); }
+  .badge.allegro { color: #ff8a3d; border: 1px solid #ff8a3d; }
+  .card a { color: var(--accent2); font-size: 12.5px; text-decoration: none; }
+  .card a:hover { text-decoration: underline; }
+  .x-btn {
+    position: absolute; top: 8px; right: 8px; width: 26px; height: 26px;
+    border-radius: 50%; border: none; background: rgba(0,0,0,.55); color: #fff;
+    cursor: pointer; font-size: 13px; display: grid; place-items: center;
+  }
+  .spin {
+    width: 30px; height: 30px; border: 3px solid var(--border);
+    border-top-color: var(--accent2); border-radius: 50%;
+    animation: spin 0.9s linear infinite; position: absolute;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty { color: var(--muted); font-size: 14px; padding: 40px 0; text-align: center; grid-column: 1/-1; }
+
+  .overlay {
+    position: fixed; inset: 0; background: rgba(10,12,18,.92);
+    display: grid; place-items: center; z-index: 100;
+  }
+  .overlay .panel { width: 340px; text-align: center; }
+  .overlay .logo { margin: 0 auto 14px; }
+  .overlay input { width: 100%; text-align: center; font-size: 22px; letter-spacing: .4em; margin: 16px 0 4px; }
+  .overlay .hint { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+  .overlay .error { color: var(--err); font-size: 13px; min-height: 18px; margin-top: 6px; }
+  .hidden { display: none !important; }
+
+  .code-box {
+    font-size: 30px; letter-spacing: .25em; font-weight: 700;
+    background: var(--panel2); border: 1px solid var(--accent2);
+    border-radius: 10px; padding: 14px; text-align: center; margin: 14px 0;
+    color: var(--accent2);
+  }
+  .allegro-note {
+    font-size: 12.5px; color: var(--muted); background: rgba(0,206,201,.05);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px;
+    margin-bottom: 16px; line-height: 1.6;
+  }
+  .searchbar { display: flex; gap: 10px; margin-bottom: 16px; }
+  .searchbar input { flex: 1; }
+
+  .overlay .panel.modal-box {
+    width: min(1320px, 96vw); max-height: 92vh; overflow: auto;
+    text-align: left;
+  }
+  .pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin: 16px 0; }
+  .pick { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--panel2); }
+  .pick .thumb { aspect-ratio: 1; background: #fff; }
+  .pick.act-process { border-color: var(--accent2); }
+  .pick.act-keep { border-color: var(--muted); opacity: .85; }
+  .pick.act-delete { border-color: var(--err); }
+  .pick.act-delete .thumb img { opacity: .35; filter: grayscale(1); }
+  .seg { display: flex; }
+  .seg button {
+    flex: 1; padding: 8px 0; font-size: 11.5px; border: none; cursor: pointer;
+    background: var(--panel2); color: var(--muted);
+  }
+  .seg button.on.process { background: rgba(0,206,201,.18); color: var(--accent2); font-weight: 700; }
+  .seg button.on.keep { background: rgba(139,145,167,.18); color: var(--text); font-weight: 700; }
+  .seg button.on.delete { background: rgba(225,112,85,.18); color: var(--err); font-weight: 700; }
+  .main-tag, .fashion-tag {
+    position: absolute; font-size: 10px; font-weight: 700; padding: 2px 8px;
+    border-radius: 12px; background: rgba(0,0,0,.65); pointer-events: none;
+  }
+  .main-tag { top: 6px; left: 6px; color: #ffd166; }
+  .fashion-tag { top: 6px; right: 6px; color: #ff8a3d; }
+  .order-row {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 5px 0; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted);
+  }
+  .order-row button {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 2px 9px; cursor: pointer; font-size: 11px;
+  }
+  .order-row button:disabled { opacity: .3; cursor: default; }
+  .modal-foot { display: flex; gap: 10px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
+  .modal-foot .summary { margin-right: auto; font-size: 13px; color: var(--muted); }
+
+  .group-head {
+    grid-column: 1/-1; display: flex; align-items: center; gap: 10px;
+    margin-top: 10px; padding-bottom: 4px; border-bottom: 1px solid var(--border);
+  }
+  .group-head:first-child { margin-top: 0; }
+  .group-head h3 { font-size: 14px; font-weight: 600; }
+  .group-head .badge { font-size: 10.5px; }
+  .offer-check {
+    position: absolute; top: 10px; left: 10px; width: 20px; height: 20px;
+    accent-color: var(--accent); cursor: pointer;
+  }
+  .ba-tag {
+    position: absolute; bottom: 8px; left: 8px; font-size: 10px; font-weight: 700;
+    padding: 2px 8px; border-radius: 12px; background: rgba(0,0,0,.6);
+    color: var(--accent2); pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="overlay hidden" id="planOverlay">
+  <div class="panel modal-box">
+    <h2 id="planTitle">Wykonanie planu na Allegro</h2>
+    <div id="planBody"></div>
+    <div class="modal-foot">
+      <span class="summary" id="planSummary"></span>
+      <button class="btn btn-ghost" id="planCancel">Zamknij</button>
+      <button class="btn btn-primary hidden" id="planGo">⚠️ Potwierdzam - zmień ofertę na Allegro</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay hidden" id="pickOverlay">
+  <div class="panel modal-box">
+    <h2 id="pickTitle">Wybierz zdjęcia</h2>
+    <p style="font-size:12.5px;color:var(--muted);line-height:1.6">
+      <b style="color:var(--accent2)">Obrób</b> - wytnij tło i przygotuj ·
+      <b>Zostaw</b> - bez zmian (np. zdjęcia fashion) ·
+      <b style="color:var(--err)">Usuń</b> - oznacz do usunięcia z oferty
+      (wykona się w fazie 2, teraz tylko zapis w planie)
+    </p>
+    <div class="pick-grid" id="pickGrid"></div>
+    <div class="modal-foot">
+      <span class="summary" id="pickSummary"></span>
+      <button class="btn btn-ghost" id="pickCancel">Anuluj</button>
+      <button class="btn btn-primary" id="pickGo">Wykonaj</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="loginOverlay">
+  <div class="panel">
+    <div class="logo">👟</div>
+    <h1 style="font-size:18px">Bosa Stopka - Studio Zdjęć</h1>
+    <input type="password" id="pinInput" maxlength="6" placeholder="••••••" autocomplete="off">
+    <div class="error" id="pinError"></div>
+    <button class="btn btn-primary w100" id="pinBtn">Odblokuj</button>
+    <p class="hint" style="margin-top:14px">PIN znajdziesz w oknie konsoli aplikacji<br>(plik app_config.json)</p>
+  </div>
+</div>
+
+<header>
+  <div class="logo">👟</div>
+  <div>
+    <h1>Bosa Stopka - Studio Zdjęć</h1>
+    <p>Wycinanie tła, cień i kadr 1:1 - gotowe na Allegro i do sklepu</p>
+  </div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="studio">Obróbka</button>
+    <button class="tab" data-tab="allegro">Allegro</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ===== ZAKLADKA OBROBKA ===== -->
+  <div id="tab-studio" class="layout">
+    <aside>
+      <div class="panel" style="margin-bottom:18px">
+        <div id="dropzone">
+          <div class="big">📥</div>
+          <p><b>Upuść zdjęcia</b>, kliknij aby wybrać<br>albo wklej <b>Ctrl+V</b></p>
+        </div>
+        <input type="file" id="fileInput" multiple accept="image/*" hidden>
+      </div>
+
+      <div class="panel">
+        <h2>Obróbka</h2>
+        <div class="opt-row">
+          <label>Rozmiar wyjściowy</label>
+          <select id="optSize">
+            <option value="1200">1200 px</option>
+            <option value="1600" selected>1600 px</option>
+            <option value="2000">2000 px</option>
+          </select>
+        </div>
+        <div class="opt-row">
+          <label>Cień pod butem<small>dwuwarstwowy, naturalny</small></label>
+          <span class="switch"><input type="checkbox" id="optShadow" checked><span class="slider-bg"></span></span>
+        </div>
+        <div class="opt-row">
+          <label>Podbicie kolorów<small>delikatna saturacja i kontrast</small></label>
+          <span class="switch"><input type="checkbox" id="optColors" checked><span class="slider-bg"></span></span>
+        </div>
+        <div class="opt-row">
+          <label>Wyostrzanie<small>tylko przy powiększaniu małych zdjęć</small></label>
+          <span class="switch"><input type="checkbox" id="optSharpen" checked><span class="slider-bg"></span></span>
+        </div>
+
+        <details>
+          <summary>Ustawienia zaawansowane</summary>
+          <div class="opt-row slider-row">
+            <label>Moc cienia <span class="range-val" id="valShadowOp">0.20</span></label>
+            <span class="range-wrap"><input type="range" id="optShadowOp" min="0.05" max="0.5" step="0.05" value="0.20"></span>
+          </div>
+          <div class="opt-row slider-row">
+            <label>Rozmycie cienia <span class="range-val" id="valShadowBlur">8</span></label>
+            <span class="range-wrap"><input type="range" id="optShadowBlur" min="4" max="24" step="1" value="8"></span>
+          </div>
+          <div class="opt-row slider-row">
+            <label>Saturacja <span class="range-val" id="valSat">1.04</span></label>
+            <span class="range-wrap"><input type="range" id="optSat" min="1.0" max="1.3" step="0.01" value="1.04"></span>
+          </div>
+          <div class="opt-row slider-row">
+            <label>Kontrast <span class="range-val" id="valCon">1.02</span></label>
+            <span class="range-wrap"><input type="range" id="optCon" min="1.0" max="1.2" step="0.01" value="1.02"></span>
+          </div>
+          <div class="opt-row slider-row">
+            <label>Wypełnienie kadru <span class="range-val" id="valPad">90%</span></label>
+            <span class="range-wrap"><input type="range" id="optPad" min="0.7" max="1.0" step="0.05" value="0.90"></span>
+          </div>
+          <div class="opt-row slider-row">
+            <label>Maks. powiększenie <span class="range-val" id="valUp">3x</span></label>
+            <span class="range-wrap"><input type="range" id="optUp" min="1" max="4" step="0.5" value="3"></span>
+          </div>
+          <button class="btn btn-ghost" id="resetBtn" style="width:100%;margin-top:12px">↺ Przywróć domyślne</button>
+        </details>
+
+        <button class="btn btn-primary w100" id="goBtn" disabled>Przetwórz</button>
+      </div>
+    </aside>
+
+    <section>
+      <div class="toolbar">
+        <button class="btn btn-ghost" id="zipBtn">⬇ Pobierz wszystko (ZIP)</button>
+        <button class="btn btn-ghost" id="clearBtn">🧹 Wyczyść zakończone</button>
+      </div>
+      <div id="cards"><div class="empty">Dodaj zdjęcia, aby zacząć</div></div>
+    </section>
+  </div>
+
+  <!-- ===== ZAKLADKA ALLEGRO ===== -->
+  <div id="tab-allegro" class="hidden">
+    <div class="allegro-note">
+      🔒 Tryb bezpieczny: aplikacja ma dostęp <b>wyłącznie do odczytu</b> ofert.
+      Obrobione zdjęcia lądują na dysku (done/), nic nie jest wysyłane do Allegro.
+    </div>
+
+    <div class="panel" id="allegroSetup">
+      <h2>Połączenie z Allegro</h2>
+      <div id="allegroSetupBody">Sprawdzanie...</div>
+    </div>
+
+    <div id="allegroBrowser" class="hidden">
+      <div class="toolbar" style="align-items:center">
+        <button class="btn btn-ghost" id="scanBtn">🔍 Skanuj tła aktywnych ofert</button>
+        <span id="scanInfo" style="font-size:13px;color:var(--muted)"></span>
+        <select id="viewMode" style="margin-left:auto">
+          <option value="all" selected>Wszystkie oferty</option>
+          <option value="needs">Tylko do obróbki (wynik skanu)</option>
+        </select>
+        <button class="btn btn-primary hidden" id="batchBtn">🪄 Obrób zaznaczone</button>
+      </div>
+      <div class="searchbar">
+        <select id="searchType">
+          <option value="phrase" selected>Nazwa</option>
+          <option value="sku">SKU</option>
+          <option value="offer_id">Nr oferty</option>
+        </select>
+        <input type="text" id="offerSearch" placeholder="Szukaj w nazwach ofert...">
+        <select id="statusFilter">
+          <option value="ACTIVE" selected>Aktywne</option>
+          <option value="INACTIVE">Nieaktywne</option>
+          <option value="ENDED">Zakończone</option>
+          <option value="">Wszystkie</option>
+        </select>
+        <button class="btn btn-ghost" id="offerSearchBtn">Szukaj</button>
+      </div>
+      <div id="allegroOffers"></div>
+      <div style="text-align:center;margin-top:18px">
+        <button class="btn btn-ghost hidden" id="moreBtn">Pokaż więcej</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => (s || "").replace(/[<>&"]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
+
+// ---------- logowanie PIN ----------
+async function api(url, opts = {}) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) { $("loginOverlay").classList.remove("hidden"); throw new Error("unauthorized"); }
+  return res;
+}
+$("pinBtn").addEventListener("click", tryLogin);
+$("pinInput").addEventListener("keydown", e => { if (e.key === "Enter") tryLogin(); });
+async function tryLogin() {
+  const res = await fetch("/api/login", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ pin: $("pinInput").value }),
+  });
+  if (res.ok) { $("loginOverlay").classList.add("hidden"); startPolling(); allegroStatus(); }
+  else { $("pinError").textContent = "Nieprawidłowy PIN"; $("pinInput").value = ""; }
+}
+
+// ---------- zakladki ----------
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  t.classList.add("active");
+  $("tab-studio").classList.toggle("hidden", t.dataset.tab !== "studio");
+  $("tab-allegro").classList.toggle("hidden", t.dataset.tab !== "allegro");
+  if (t.dataset.tab === "allegro") allegroStatus();
+}));
+
+// ---------- opcje ----------
+const bind = (rid, vid, fmt) => {
+  const r = $(rid), v = $(vid);
+  r.addEventListener("input", () => v.textContent = fmt(r.value));
+};
+bind("optShadowOp", "valShadowOp", x => (+x).toFixed(2));
+bind("optShadowBlur", "valShadowBlur", x => x);
+bind("optSat", "valSat", x => (+x).toFixed(2));
+bind("optCon", "valCon", x => (+x).toFixed(2));
+bind("optPad", "valPad", x => Math.round(x * 100) + "%");
+bind("optUp", "valUp", x => x + "x");
+
+const OPT_DEFAULTS = {
+  optSize: "1600", optShadow: true, optColors: true, optSharpen: true,
+  optShadowOp: "0.20", optShadowBlur: "8", optSat: "1.04",
+  optCon: "1.02", optPad: "0.90", optUp: "3",
+};
+$("resetBtn").addEventListener("click", () => {
+  for (const [id, val] of Object.entries(OPT_DEFAULTS)) {
+    const el = $(id);
+    if (typeof val === "boolean") el.checked = val;
+    else el.value = val;
+    el.dispatchEvent(new Event("input"));
+  }
+});
+
+function optionsForm(fd) {
+  fd.append("size", $("optSize").value);
+  fd.append("shadow", $("optShadow").checked);
+  fd.append("colors", $("optColors").checked);
+  fd.append("sharpen", $("optSharpen").checked);
+  fd.append("shadow_opacity", $("optShadowOp").value);
+  fd.append("shadow_blur", $("optShadowBlur").value);
+  fd.append("saturation", $("optSat").value);
+  fd.append("contrast", $("optCon").value);
+  fd.append("padding", $("optPad").value);
+  fd.append("max_upscale", $("optUp").value);
+  return fd;
+}
+
+// ---------- dodawanie plikow ----------
+const pending = [];
+const dropzone = $("dropzone"), fileInput = $("fileInput"), goBtn = $("goBtn"), cards = $("cards");
+
+dropzone.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => { addFiles(fileInput.files); fileInput.value = ""; });
+["dragenter", "dragover"].forEach(ev => dropzone.addEventListener(ev, e => {
+  e.preventDefault(); dropzone.classList.add("drag");
+}));
+["dragleave", "drop"].forEach(ev => dropzone.addEventListener(ev, e => {
+  e.preventDefault(); dropzone.classList.remove("drag");
+}));
+dropzone.addEventListener("drop", e => addFiles(e.dataTransfer.files));
+document.addEventListener("paste", e => {
+  const files = [...e.clipboardData.items]
+    .filter(i => i.type.startsWith("image/")).map(i => i.getAsFile());
+  if (files.length) addFiles(files);
+});
+function addFiles(list) {
+  for (const f of list) {
+    if (!f || !f.type.startsWith("image/")) continue;
+    pending.push({ file: f, url: URL.createObjectURL(f) });
+  }
+  render();
+}
+function removePending(i) {
+  URL.revokeObjectURL(pending[i].url);
+  pending.splice(i, 1); render();
+}
+
+function toggleBA(img) {
+  const showBefore = img.src.includes("/done/");
+  img.src = showBefore ? img.dataset.before : img.dataset.after;
+  img.nextElementSibling.textContent = showBefore ? "PRZED" : "PO";
+}
+
+async function retryJob(id, el) {
+  el.textContent = "...";
+  const fd = optionsForm(new FormData());
+  try {
+    const res = await api(`/api/jobs/${id}/retry`, { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.error) { alert(data.error); el.textContent = "↻ Ponów"; return; }
+    startPolling();
+  } catch { el.textContent = "↻ Ponów"; }
+}
+
+// ---------- przetwarzanie ----------
+goBtn.addEventListener("click", async () => {
+  if (!pending.length) return;
+  const fd = optionsForm(new FormData());
+  for (const p of pending) fd.append("files", p.file, p.file.name);
+  goBtn.disabled = true; goBtn.textContent = "Wysyłanie...";
+  await api("/api/process", { method: "POST", body: fd });
+  pending.forEach(p => URL.revokeObjectURL(p.url));
+  pending.length = 0;
+  startPolling();
+  render();
+});
+$("zipBtn").addEventListener("click", () => location.href = "/api/zip");
+$("clearBtn").addEventListener("click", async () => {
+  await api("/api/clear", { method: "POST" }); refresh();
+});
+
+// ---------- stan zadan ----------
+let polling = null, lastJobs = [], lastJobsKey = "", hadActiveAllegro = false;
+async function refresh() {
+  let fresh;
+  try {
+    const res = await api("/api/jobs");
+    fresh = await res.json();
+  } catch { return; }
+  const key = JSON.stringify(fresh);
+  if (key !== lastJobsKey) {       // przerysuj tylko gdy cos sie zmienilo
+    lastJobsKey = key;
+    lastJobs = fresh;
+    render();
+  }
+  const active = fresh.some(j => j.status === "queued" || j.status === "processing");
+  const activeAllegro = fresh.some(j => j.source === "allegro" &&
+    (j.status === "queued" || j.status === "processing"));
+  // obrobka zdjec z Allegro wlasnie sie skonczyla -> odswiez plakietki ofert
+  if (hadActiveAllegro && !activeAllegro) loadOffers(true);
+  hadActiveAllegro = activeAllegro;
+  if (!active && polling) { clearInterval(polling); polling = null; }
+}
+function startPolling() {
+  if (!polling) polling = setInterval(refresh, 1500);
+  refresh();
+}
+
+const STATUS = {
+  queued: ["W kolejce", "queued"],
+  processing: ["Przetwarzanie...", "processing"],
+  done: ["Gotowe", "done"],
+  error: ["Błąd", "error"],
+};
+
+function render() {
+  goBtn.disabled = !pending.length;
+  goBtn.textContent = pending.length ? `Przetwórz (${pending.length})` : "Przetwórz - dodaj zdjęcia";
+
+  let html = "";
+  for (let i = 0; i < pending.length; i++) {
+    const p = pending[i];
+    html += `<div class="card">
+      <div class="thumb"><img src="${p.url}"><button class="x-btn" onclick="removePending(${i})">✕</button></div>
+      <div class="card-body">
+        <span class="card-name">${esc(p.file.name)}</span>
+        <span class="badge">Do przetworzenia</span>
+      </div></div>`;
+  }
+  // grupowanie zadan po produkcie/ofercie
+  const pidOf = name => {
+    const stem = name.replace(/\.[^.]+$/, "");
+    const m = stem.match(/^(.+?)_\d+$/);
+    return m ? m[1] : stem;
+  };
+  const groups = new Map();
+  for (const j of [...lastJobs].reverse()) {
+    const pid = pidOf(j.name);
+    if (!groups.has(pid)) groups.set(pid, []);
+    groups.get(pid).push(j);
+  }
+  for (const [pid, gjobs] of groups) {
+    const doneCount = gjobs.filter(j => j.status === "done").length;
+    const isAllegro = gjobs.some(j => j.source === "allegro");
+    html += `<div class="group-head">
+      <h3>📁 ${esc(pid)}</h3>
+      <span class="badge">${doneCount}/${gjobs.length} gotowych</span>
+      ${isAllegro ? `<span class="badge allegro">Allegro</span>` : ""}
+    </div>`;
+    for (const j of gjobs) {
+      const [label, cls] = STATUS[j.status] || [j.status, ""];
+      let thumb = `<div class="spin"></div>`;
+      if (j.status === "done") {
+        // stabilny cache-buster: zmienia sie tylko po ponownej obrobce
+        const after = `/done/${j.result}?t=${j.id}-${j.seconds || 0}`;
+        thumb = j.orig
+          ? `<img src="${after}" data-after="${after}" data-before="/originals/${esc(j.orig)}"
+               onclick="toggleBA(this)" title="Kliknij: przed / po" style="cursor:pointer">
+             <span class="ba-tag">PO</span>`
+          : `<img src="${after}">`;
+      }
+      if (j.status === "error") thumb = `<span style="font-size:30px">⚠️</span>`;
+      if (j.status === "queued") thumb = `<span style="font-size:26px;color:var(--muted)">⏳</span>`;
+      const canRetry = (j.status === "done" || j.status === "error") && j.orig;
+      html += `<div class="card">
+        <div class="thumb">${thumb}</div>
+        <div class="card-body">
+          <span class="card-name">${esc(j.name)}</span>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <span class="badge ${cls}">${label}${j.seconds ? " · " + j.seconds + "s" : ""}</span>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            ${j.status === "done" ? `<a href="/done/${j.result}" download>Pobierz JPG</a>` : ""}
+            ${canRetry ? `<a href="#" onclick="retryJob('${j.id}', this); return false" title="Obrob ponownie z aktualnymi ustawieniami">↻ Ponów</a>` : ""}
+          </div>
+          ${j.status === "error" ? `<span style="color:var(--err);font-size:12px">${esc(j.error || "")}</span>` : ""}
+        </div></div>`;
+    }
+  }
+  cards.innerHTML = html || `<div class="empty">Dodaj zdjęcia, aby zacząć</div>`;
+}
+
+// ---------- Allegro ----------
+let offerOffset = 0;
+
+async function allegroStatus() {
+  let st;
+  try {
+    const res = await api("/api/allegro/status");
+    st = await res.json();
+  } catch { return; }
+  const body = $("allegroSetupBody");
+  if (!st.configured) {
+    $("allegroBrowser").classList.add("hidden");
+    body.innerHTML = `
+      <p style="font-size:14px;line-height:1.7;color:var(--muted)">
+        Brak konfiguracji. Zarejestruj aplikację na
+        <a href="https://apps.developer.allegro.pl" target="_blank" style="color:var(--accent2)">apps.developer.allegro.pl</a>
+        (typ: urządzenie bez przeglądarki / device), a potem uzupełnij plik
+        <b style="color:var(--text)">allegro_config.json</b> w katalogu aplikacji:</p>
+      <pre style="background:var(--panel2);padding:12px;border-radius:8px;margin-top:10px;font-size:13px">{
+  "client_id": "...",
+  "client_secret": "..."
+}</pre>`;
+    return;
+  }
+  // trwajaca autoryzacja (np. rozszerzenie o zapis) ma pierwszenstwo
+  if (st.connect && st.connect.status === "waiting") {
+    body.innerHTML = `
+      <p style="font-size:14px;color:var(--muted)">Wejdź na
+        <a href="${esc(st.connect.verification_uri)}" target="_blank" style="color:var(--accent2)">${esc(st.connect.verification_uri)}</a>
+        i potwierdź kod:</p>
+      <div class="code-box">${esc(st.connect.user_code)}</div>
+      <p style="font-size:13px;color:var(--muted)">Czekam na potwierdzenie...</p>`;
+    setTimeout(allegroStatus, 4000);
+    return;
+  }
+  if (st.authorized) {
+    allegroWrite = !!st.write;
+    body.innerHTML = `<span class="badge done">Połączono z Allegro</span>
+      <span class="badge" style="margin-left:6px">${st.write ? "uprawnienia: odczyt + zapis" : "uprawnienia: tylko odczyt"}</span>
+      ${!st.write ? `<button class="btn btn-ghost" style="margin-left:10px" onclick="reconnectWrite()">🔑 Rozszerz o zapis</button>` : ""}`;
+    $("allegroBrowser").classList.remove("hidden");
+    if (!$("allegroOffers").innerHTML) loadOffers(true);
+    scanStatus();
+    return;
+  }
+  if (st.connect && st.connect.status === "waiting") {
+    body.innerHTML = `
+      <p style="font-size:14px;color:var(--muted)">Wejdź na
+        <a href="${esc(st.connect.verification_uri)}" target="_blank" style="color:var(--accent2)">${esc(st.connect.verification_uri)}</a>
+        i potwierdź kod:</p>
+      <div class="code-box">${esc(st.connect.user_code)}</div>
+      <p style="font-size:13px;color:var(--muted)">Czekam na potwierdzenie...</p>`;
+    setTimeout(allegroStatus, 4000);
+    return;
+  }
+  body.innerHTML = `
+    ${st.connect && st.connect.error ? `<p style="color:var(--err);font-size:13px;margin-bottom:10px">${esc(st.connect.error)}</p>` : ""}
+    <button class="btn btn-primary" id="connectBtn">🔗 Połącz konto Allegro</button>`;
+  $("connectBtn").addEventListener("click", async () => {
+    await api("/api/allegro/connect", { method: "POST" });
+    allegroStatus();
+  });
+}
+
+const SEARCH_PLACEHOLDERS = {
+  phrase: "Szukaj w nazwach ofert...",
+  sku: "Podaj SKU (external.id z IdoSell)...",
+  offer_id: "Podaj numer oferty Allegro...",
+};
+$("searchType").addEventListener("change", () => {
+  $("offerSearch").placeholder = SEARCH_PLACEHOLDERS[$("searchType").value];
+});
+
+async function loadOffers(reset) {
+  if (reset) { offerOffset = 0; $("allegroOffers").innerHTML = `<div class="empty">Ładowanie...</div>`; }
+  const params = new URLSearchParams({ offset: offerOffset, limit: 20 });
+  let endpoint = "/api/allegro/offers";
+  if ($("viewMode").value === "needs") {
+    endpoint = "/api/allegro/scan/results";
+  } else {
+    const q = $("offerSearch").value.trim();
+    if (q) params.set($("searchType").value, q);
+    if ($("statusFilter").value) params.set("status", $("statusFilter").value);
+  }
+  let data;
+  try {
+    const res = await api(`${endpoint}?${params}`);
+    data = await res.json();
+  } catch { return; }
+  if (data.error) {
+    $("allegroOffers").innerHTML = `<div class="empty" style="color:var(--err)">${esc(data.error)}</div>`;
+    return;
+  }
+  let html = reset ? "" : $("allegroOffers").innerHTML;
+  for (const o of data.offers) {
+    const checked = selectedOffers.has(String(o.id)) ? "checked" : "";
+    html += `<div class="card">
+      <div class="thumb white">${o.image ? `<img src="${esc(o.image)}">` : `<span style="font-size:26px">🖼</span>`}
+        <input type="checkbox" class="offer-check" data-id="${esc(o.id)}" ${checked}
+          onchange="toggleOffer('${esc(o.id)}', this.checked)">
+      </div>
+      <div class="card-body">
+        <span class="card-name">${esc(o.name)}</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <span class="badge">${esc(o.status || "")}</span>
+          <span class="badge">szt: ${o.stock ?? "-"}</span>
+          ${o.sku ? `<span class="badge">SKU: ${esc(o.sku)}</span>` : ""}
+          ${o.needs === true ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">${(o.reasons || []).includes("proporcje") ? "✂ " : "🎨 "}do obróbki${(o.reasons || []).length ? ": " + o.reasons.join("+").replace("tlo", "tło") : ""}</span>` : ""}
+          ${o.needs === false ? `<span class="badge" style="color:var(--ok)">tło OK</span>` : ""}
+          ${o.processed ? `<span class="badge done">✓ obrobione</span>` : ""}
+          ${o.plan && !o.processed ? `<span class="badge">📋 plan</span>` : ""}
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost" style="flex:1" onclick="processOffer('${esc(o.id)}', this)">🪄 Obrób zdjęcia</button>
+          ${o.plan ? `<button class="btn btn-ghost" title="Wykonaj plan na Allegro" onclick="openPlan('${esc(o.id)}')">📤</button>` : ""}
+        </div>
+      </div></div>`;
+  }
+  $("allegroOffers").innerHTML = html || `<div class="empty">Brak ofert</div>`;
+  offerOffset += data.offers.length;
+  $("moreBtn").classList.toggle("hidden", offerOffset >= data.total);
+}
+
+// ---------- wybor zdjec oferty ----------
+let pickState = { offerId: null, items: [], btn: null };
+
+async function processOffer(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Wczytywanie..."; }
+  let data;
+  try {
+    const res = await api(`/api/allegro/offers/${id}/images`);
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (btn) { btn.disabled = false; btn.textContent = "🪄 Obrób zdjęcia"; }
+  if (data.error) {
+    if (batchQueue.length) { openNextInBatch(); return; }
+    alert(data.error); return;
+  }
+  pickState = {
+    offerId: id,
+    items: data.images.map((u, i) => ({
+      url: u,
+      action: (data.suggestions || [])[i] || "process",
+      suggested: (data.suggestions || [])[i] === "keep",
+      index: i + 1,
+    })),
+    btn,
+  };
+  renderPick();
+  $("pickOverlay").classList.remove("hidden");
+}
+
+function renderPick() {
+  const batchInfo = batchQueue.length ? ` · w kolejce wyboru: ${batchQueue.length}` : "";
+  $("pickTitle").textContent = `Oferta ${pickState.offerId} - ${pickState.items.length} zdjęć${batchInfo}`;
+  $("pickGrid").innerHTML = pickState.items.map((it, i) => `
+    <div class="pick act-${it.action}">
+      <div class="thumb"><img src="${esc(it.url)}" loading="lazy">
+        ${i === 0 ? `<span class="main-tag">★ miniaturka</span>` : ""}
+        ${it.suggested ? `<span class="fashion-tag">fashion?</span>` : ""}
+      </div>
+      <div class="order-row">
+        <button onclick="movePick(${i},-1)" ${i === 0 ? "disabled" : ""} title="W lewo">◀</button>
+        <button onclick="makeMain(${i})" ${i === 0 ? "disabled" : ""} title="Ustaw jako miniaturkę">★</button>
+        <span>${i + 1}</span>
+        <button onclick="movePick(${i},1)" ${i === pickState.items.length - 1 ? "disabled" : ""} title="W prawo">▶</button>
+      </div>
+      <div class="seg">
+        <button class="process ${it.action === "process" ? "on" : ""}" onclick="setPick(${i},'process')">Obrób</button>
+        <button class="keep ${it.action === "keep" ? "on" : ""}" onclick="setPick(${i},'keep')">Zostaw</button>
+        <button class="delete ${it.action === "delete" ? "on" : ""}" onclick="setPick(${i},'delete')">Usuń</button>
+      </div>
+    </div>`).join("");
+  const c = a => pickState.items.filter(x => x.action === a).length;
+  $("pickSummary").textContent =
+    `Obróbka: ${c("process")} · Zostaw: ${c("keep")} · Do usunięcia: ${c("delete")} · kolejność = galeria`;
+  $("pickGo").disabled = !pickState.items.length;
+}
+function setPick(i, action) { pickState.items[i].action = action; renderPick(); }
+function movePick(i, d) {
+  const items = pickState.items;
+  const j = i + d;
+  if (j < 0 || j >= items.length) return;
+  [items[i], items[j]] = [items[j], items[i]];
+  renderPick();
+}
+function makeMain(i) {
+  const [it] = pickState.items.splice(i, 1);
+  pickState.items.unshift(it);
+  renderPick();
+}
+
+$("pickCancel").addEventListener("click", () => {
+  if (batchQueue.length &&
+      !confirm(`Przerwać wybór dla pozostałych ${batchQueue.length} ofert?`)) return;
+  batchQueue = [];
+  $("pickOverlay").classList.add("hidden");
+});
+$("pickGo").addEventListener("click", async () => {
+  const fd = optionsForm(new FormData());
+  fd.append("decisions", JSON.stringify(pickState.items));
+  $("pickGo").disabled = true; $("pickGo").textContent = "Wysyłanie...";
+  let data;
+  try {
+    const res = await api(`/api/allegro/offers/${pickState.offerId}/process`, { method: "POST", body: fd });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  $("pickGo").disabled = false; $("pickGo").textContent = "Wykonaj";
+  if (data.error) { alert(data.error); return; }
+  if (pickState.btn) pickState.btn.textContent = `W kolejce (${data.jobs.length})`;
+  if (data.jobs.length) startPolling();
+  if (batchQueue.length) {
+    openNextInBatch();   // nastepna oferta z batcha, overlay zostaje
+  } else {
+    $("pickOverlay").classList.add("hidden");
+    if (data.jobs.length) document.querySelector('.tab[data-tab="studio"]').click();
+  }
+});
+
+// ---------- faza 2: wykonanie planu ----------
+let planOfferId = null, allegroWrite = false;
+
+async function openPlan(offerId) {
+  planOfferId = offerId;
+  $("planTitle").textContent = `Plan oferty ${offerId}`;
+  $("planBody").innerHTML = "Ładowanie...";
+  $("planGo").classList.add("hidden");
+  $("planOverlay").classList.remove("hidden");
+  let plan;
+  try {
+    const res = await api(`/api/allegro/offers/${offerId}/plan`);
+    plan = await res.json();
+  } catch { return; }
+  if (plan.error) { $("planBody").innerHTML = `<p style="color:var(--err)">${esc(plan.error)}</p>`; return; }
+  planData = plan;
+
+  const LBL = { process: ["✨ obrobione", "var(--accent2)"], keep: ["bez zmian", "var(--muted)"], delete: ["🗑 usunięte", "var(--err)"] };
+  let html = `<div class="pick-grid">`;
+  for (const it of plan.items) {
+    const [lbl, color] = LBL[it.action];
+    const src = it.action === "process"
+      ? (it.local ? `/done/${it.local}` : null) : it.url;
+    html += `<div class="pick" style="border-color:${color}">
+      <div class="thumb">${src ? `<img src="${esc(src)}" loading="lazy">` : `<div class="spin"></div>`}</div>
+      <div style="padding:8px;text-align:center;font-size:12px;color:${color}">
+        ${it.index}. ${lbl}${it.action === "process" && !it.local ? " (czeka na obróbkę)" : ""}
+      </div></div>`;
+  }
+  html += `</div>`;
+  if (plan.executed_at) html += `<p style="font-size:12.5px;color:var(--ok)">Plan wykonany ${esc(plan.executed_at)} - ponowne wykonanie nadpisze ofertę jeszcze raz.
+    <button class="btn btn-ghost" style="margin-left:10px" onclick="rollbackPlan()">↩ Rollback</button></p>
+    <div id="siblingsBox" style="margin-top:14px"></div>`;
+  $("planBody").innerHTML = html;
+  $("planSummary").textContent = `Po zmianie oferta będzie miała ${plan.final_count} zdjęć`;
+  if (plan.executed_at) loadSiblings();
+
+  if (!allegroWrite) {
+    $("planBody").innerHTML += `
+      <div class="allegro-note" style="margin-top:14px">Wykonanie planu wymaga uprawnień zapisu.
+      <button class="btn btn-ghost" style="margin-left:10px" onclick="reconnectWrite()">🔑 Połącz ponownie (z zapisem)</button></div>`;
+  } else if (plan.ready) {
+    $("planGo").classList.remove("hidden");
+  } else {
+    $("planBody").innerHTML += `<p style="color:#ff8a3d;font-size:13px">Nie wszystkie zdjęcia z planu są obrobione - dokończ obróbkę.</p>`;
+  }
+}
+
+async function reconnectWrite() {
+  await api("/api/allegro/connect?write=1", { method: "POST" });
+  $("planOverlay").classList.add("hidden");
+  document.querySelector('.tab[data-tab="allegro"]').click();
+  allegroStatus();
+}
+
+let planData = null;
+
+$("planCancel").addEventListener("click", () => $("planOverlay").classList.add("hidden"));
+
+// krok 2: ekran potwierdzenia - dokladna lista tego, co poleci do Allegro
+$("planGo").addEventListener("click", () => {
+  if (!planData) return;
+  const up = planData.items.filter(i => i.action === "process");
+  const del = planData.items.filter(i => i.action === "delete");
+  const keep = planData.items.filter(i => i.action === "keep");
+  const upKb = up.reduce((s, i) => s + (i.size_kb || 0), 0);
+  $("planGo").classList.add("hidden");
+  $("planBody").innerHTML = `
+    <div class="allegro-note" style="border-color:var(--err)">
+      ⚠️ <b>Za chwilę zmienisz ofertę ${esc(planOfferId)} na Allegro.</b><br>
+      Wgrane zostaną: <b>${up.length} obrobionych zdjęć</b> (${Math.round(upKb/1024*10)/10} MB) ·
+      usunięte: <b style="color:var(--err)">${del.length}</b> ·
+      bez zmian: <b>${keep.length}</b> ·
+      finalnie oferta będzie miała <b>${planData.final_count} zdjęć</b>.
+    </div>
+    <details>
+      <summary>Pokaż dokładną listę operacji (${planData.items.length} pozycji)</summary>
+      <div style="font-size:12.5px;line-height:1.9;font-family:monospace;background:var(--panel2);padding:12px;border-radius:8px;margin-top:8px">
+        ${planData.items.map(i => {
+          if (i.action === "process") return `${i.index}. WGRAJ &nbsp;done/${esc(i.local)} (${i.size_kb} KB)`;
+          if (i.action === "delete") return `${i.index}. <span style="color:var(--err)">USUŃ</span> &nbsp;${esc((i.url||"").slice(-40))}`;
+          return `${i.index}. ZOSTAW ${esc((i.url||"").slice(-40))}`;
+        }).join("<br>")}
+      </div>
+    </details>
+    <label style="display:flex;gap:10px;align-items:center;margin:16px 0;font-size:13.5px">
+      <input type="checkbox" id="confirmCheck" style="width:18px;height:18px;accent-color:var(--err)">
+      Rozumiem, że ta operacja zmieni ofertę na Allegro (mam możliwość rollbacku)
+    </label>
+    <button class="btn btn-primary" id="reallyGo" disabled style="background:linear-gradient(135deg,#e17055,#d63031)">📤 Wyślij do Allegro</button>`;
+  $("confirmCheck").addEventListener("change", e => $("reallyGo").disabled = !e.target.checked);
+  $("reallyGo").addEventListener("click", executePlan);
+});
+
+async function executePlan() {
+  $("reallyGo").disabled = true; $("reallyGo").textContent = "Wykonywanie...";
+  let data;
+  try {
+    const res = await api(`/api/allegro/offers/${planOfferId}/execute`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) {
+    alert(data.error);
+    $("reallyGo").disabled = false; $("reallyGo").textContent = "📤 Wyślij do Allegro";
+    return;
+  }
+  $("planBody").innerHTML = `
+    <p style="color:var(--ok);font-size:15px">✅ Wykonano: wgrano ${data.uploaded} zdjęć, oferta ma teraz ${data.final_count} zdjęć.</p>
+    <p style="font-size:12.5px;color:var(--muted);margin-top:8px">Backup poprzedniej listy: done/${esc(planOfferId)}/plan.json · wpis w dzienniku: allegro_audit.jsonl</p>
+    <button class="btn btn-ghost" style="margin-top:14px" onclick="rollbackPlan()">↩ Przywróć poprzednie zdjęcia (rollback)</button>
+    <div id="siblingsBox" style="margin-top:18px"></div>`;
+  loadOffers(true);
+  loadSiblings();
+}
+
+// ---------- warianty rozmiarowe (wspolna baza SKU) ----------
+async function loadSiblings() {
+  const box = $("siblingsBox");
+  if (!box) return;
+  box.innerHTML = `<p style="font-size:13px;color:var(--muted)">Szukam wariantów rozmiarowych (wspólne SKU)...</p>`;
+  let data;
+  try {
+    const res = await api(`/api/allegro/offers/${planOfferId}/siblings`);
+    data = await res.json();
+  } catch { box.innerHTML = ""; return; }
+  if (data.error || !data.siblings || !data.siblings.length) {
+    box.innerHTML = data.base
+      ? `<p style="font-size:13px;color:var(--muted)">Brak innych wariantów dla SKU ${esc(data.base)}-*</p>` : "";
+    return;
+  }
+  box.innerHTML = `
+    <div class="allegro-note">
+      👟 <b>Model ${esc(data.base)}</b> ma ${data.siblings.length} innych wariantów rozmiarowych -
+      te same zdjęcia można nałożyć na wszystkie jednym ruchem (bez ponownego uploadu).
+    </div>
+    <div style="max-height:220px;overflow:auto;font-size:13px;line-height:2;background:var(--panel2);border-radius:10px;padding:10px 14px">
+      ${data.siblings.map(s => `
+        <label style="display:flex;gap:10px;align-items:center">
+          <input type="checkbox" class="sib-check" value="${esc(s.id)}" ${s.status === "ACTIVE" ? "checked" : ""} style="accent-color:var(--accent)">
+          <span style="min-width:90px;color:var(--accent2)">${esc(s.sku)}</span>
+          <span class="badge">${esc(s.status)}</span>
+          ${s.plan ? `<span class="badge">📋 ma plan</span>` : ""}
+          <span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.id)}</span>
+        </label>`).join("")}
+    </div>
+    <button class="btn btn-primary" id="sibGo" style="margin-top:12px">📤 Zastosuj te zdjęcia na zaznaczonych wariantach</button>`;
+  $("sibGo").addEventListener("click", applySiblings);
+}
+
+async function applySiblings() {
+  const targets = [...document.querySelectorAll(".sib-check:checked")].map(c => c.value);
+  if (!targets.length) { alert("Zaznacz przynajmniej jeden wariant"); return; }
+  if (!confirm(`Nałożyć finalną listę zdjęć oferty ${planOfferId} na ${targets.length} wariantów na Allegro?\nKażdy wariant dostaje backup i wpis w dzienniku.`)) return;
+  $("sibGo").disabled = true; $("sibGo").textContent = "Wykonywanie...";
+  let data;
+  try {
+    const res = await api(`/api/allegro/offers/${planOfferId}/apply-to-siblings`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true, targets }),
+    });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); $("sibGo").disabled = false; $("sibGo").textContent = "📤 Zastosuj te zdjęcia na zaznaczonych wariantach"; return; }
+  const fails = (data.results || []).filter(r => !r.ok);
+  $("siblingsBox").innerHTML = `
+    <p style="color:var(--ok);font-size:14px">✅ Zastosowano na ${data.ok} wariantach${data.failed ? `, błędy: ${data.failed}` : ""}.</p>
+    ${fails.map(f => `<p style="color:var(--err);font-size:12px">${esc(f.id)}: ${esc(f.error || "")}</p>`).join("")}`;
+  loadOffers(true);
+}
+
+async function rollbackPlan() {
+  if (!confirm(`Przywrócić poprzednią listę zdjęć oferty ${planOfferId} na Allegro?`)) return;
+  let data;
+  try {
+    const res = await api(`/api/allegro/offers/${planOfferId}/rollback`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); return; }
+  $("planBody").innerHTML = `<p style="color:var(--ok);font-size:15px">↩ Przywrócono ${data.restored} poprzednich zdjęć oferty.</p>`;
+  loadOffers(true);
+}
+
+// ---------- skan tla ----------
+let scanPoll = null;
+async function scanStatus() {
+  let st;
+  try {
+    const res = await api("/api/allegro/scan/status");
+    st = await res.json();
+  } catch { return; }
+  const info = $("scanInfo");
+  if (st.status === "running") {
+    info.textContent = `Skanowanie: ${st.checked}/${st.total || "?"} · do obróbki: ${st.needs}`;
+    $("scanBtn").textContent = "⏹ Zatrzymaj skan";
+    if (!scanPoll) scanPoll = setInterval(scanStatus, 2500);
+  } else {
+    if (scanPoll) { clearInterval(scanPoll); scanPoll = null; }
+    $("scanBtn").textContent = "🔍 Skanuj tła aktywnych ofert";
+    if (st.status === "done") info.textContent = `Skan zakończony: ${st.checked} ofert, do obróbki: ${st.needs}`;
+    else if (st.status === "stopped") info.textContent = `Skan zatrzymany (${st.checked} sprawdzonych, do obróbki: ${st.needs})`;
+    else if (st.status === "error") info.textContent = `Błąd skanu: ${st.error || ""}`;
+    else if (st.needs > 0) info.textContent = `Poprzedni skan: do obróbki ${st.needs}`;
+  }
+}
+$("scanBtn").addEventListener("click", async () => {
+  if ($("scanBtn").textContent.includes("Zatrzymaj")) {
+    await api("/api/allegro/scan/stop", { method: "POST" });
+  } else {
+    await api("/api/allegro/scan", { method: "POST" });
+  }
+  scanStatus();
+});
+
+// ---------- multi-select / batch ----------
+const selectedOffers = new Set();
+function toggleOffer(id, on) {
+  if (on) selectedOffers.add(String(id)); else selectedOffers.delete(String(id));
+  const btn = $("batchBtn");
+  btn.classList.toggle("hidden", !selectedOffers.size);
+  btn.textContent = `🪄 Obrób zaznaczone (${selectedOffers.size})`;
+}
+// batch: okno wyboru zdjec otwiera sie PO KOLEI dla kazdej zaznaczonej
+// oferty (wybor obrob/zostaw/usun + kolejnosc), dopiero potem mielenie
+let batchQueue = [];
+
+$("batchBtn").addEventListener("click", () => {
+  batchQueue = [...selectedOffers];
+  if (!batchQueue.length) return;
+  selectedOffers.clear();
+  toggleOffer("", false);
+  openNextInBatch();
+});
+
+function openNextInBatch() {
+  const id = batchQueue.shift();
+  if (!id) {
+    $("pickOverlay").classList.add("hidden");
+    startPolling();
+    document.querySelector('.tab[data-tab="studio"]').click();
+    return;
+  }
+  processOffer(id, null);
+}
+
+$("viewMode").addEventListener("change", () => loadOffers(true));
+$("offerSearchBtn").addEventListener("click", () => loadOffers(true));
+$("offerSearch").addEventListener("keydown", e => { if (e.key === "Enter") loadOffers(true); });
+$("statusFilter").addEventListener("change", () => loadOffers(true));
+$("moreBtn").addEventListener("click", () => loadOffers(false));
+
+// start: sprawdz czy zalogowany
+(async () => {
+  const res = await fetch("/api/jobs");
+  if (res.status === 401) $("loginOverlay").classList.remove("hidden");
+  else { startPolling(); }
+})();
+</script>
+</body>
+</html>
