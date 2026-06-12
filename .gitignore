@@ -7,6 +7,9 @@ app_config.json
 # stan lokalny / dane robocze
 jobs_state.json
 scan_state.json
+idosell_scan_state.json
+server_out.log
+server_err.log
 sku_index.json
 idosell_audit.jsonl
 allegro_audit.jsonl

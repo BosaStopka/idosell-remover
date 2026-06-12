@@ -27,6 +27,7 @@ from flask import (Flask, jsonify, make_response, request, send_file,
                    send_from_directory)
 
 import allegro_client
+import idosell_client
 import pipeline
 
 BASE = Path(__file__).parent
@@ -982,10 +983,283 @@ def allegro_offer_rollback(offer_id):
     return jsonify({"ok": True, "restored": len(backup)})
 
 
+# ---------------- IdoSell (FAZA 1 - wylacznie odczyt) ----------------
+
+IDO_SCAN_STATE_FILE = BASE / "idosell_scan_state.json"
+ido_scan_lock = threading.Lock()
+ido_scan_state = {"status": "idle", "total": 0, "checked": 0, "results": {}}
+
+if IDO_SCAN_STATE_FILE.exists():
+    try:
+        ido_scan_state = json.loads(
+            IDO_SCAN_STATE_FILE.read_text(encoding="utf-8"))
+        if ido_scan_state.get("status") == "running":
+            ido_scan_state["status"] = "stopped"
+    except (json.JSONDecodeError, OSError):
+        pass
+
+
+def save_ido_scan_state():
+    try:
+        IDO_SCAN_STATE_FILE.write_text(
+            json.dumps(ido_scan_state, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _ido_scan_page_retry(page: int, retries: int = 4) -> dict:
+    for attempt in range(retries):
+        try:
+            return idosell_client.scan_page(page, limit=100)
+        except Exception:
+            if attempt == retries - 1:
+                raise
+            time.sleep(15 * (attempt + 1))
+
+
+def ido_scan_worker():
+    page = 0
+    try:
+        while True:
+            with ido_scan_lock:
+                if ido_scan_state["status"] != "running":
+                    return
+            data = _ido_scan_page_retry(page)
+            products = data["products"]
+            with ido_scan_lock:
+                ido_scan_state["total"] = data["total"]
+            if not products:
+                break
+            for p in products:
+                while inference_busy.is_set():  # pauza gdy modele miela
+                    time.sleep(2)
+                with ido_scan_lock:
+                    if ido_scan_state["status"] != "running":
+                        return
+                    already = str(p["id"]) in ido_scan_state["results"]
+                if already:  # wznowienie - pomijamy sprawdzone
+                    continue
+                first = p["images"][0] if p["images"] else None
+                entry = {"name": p["name"], "code": p["code"],
+                         "image": first["thumb"] if first else None,
+                         "images_count": p["images_count"], "needs": None}
+                if first:
+                    for attempt in range(3):
+                        try:
+                            thumb = idosell_client.download_image(first["thumb"])
+                            flags = thumb_flags(thumb)
+                            entry["needs"] = flags["needs"]
+                            entry["reasons"] = flags["reasons"]
+                            break
+                        except Exception:
+                            time.sleep(10 * (attempt + 1))
+                with ido_scan_lock:
+                    ido_scan_state["results"][str(p["id"])] = entry
+                    ido_scan_state["checked"] = len(ido_scan_state["results"])
+                    checked = ido_scan_state["checked"]
+                if checked % 25 == 0:
+                    save_ido_scan_state()
+            page += 1
+            if page >= data["pages"]:
+                break
+        with ido_scan_lock:
+            ido_scan_state["status"] = "done"
+    except Exception as e:
+        with ido_scan_lock:
+            ido_scan_state["status"] = "error"
+            ido_scan_state["error"] = f"{e} - kliknij Skanuj aby wznowic"
+    finally:
+        save_ido_scan_state()
+
+
+def ido_local_flags(product_id) -> dict:
+    """Plakietki: czy produkt ma juz wyniki/plan lokalnie + wynik skanu."""
+    out_dir = DONE_DIR / str(product_id)
+    has_results = out_dir.exists() and any(out_dir.glob("*.jpg"))
+    has_plan = (out_dir / "plan.json").exists()
+    with ido_scan_lock:
+        scan = ido_scan_state["results"].get(str(product_id), {})
+    return {"processed": has_results, "plan": has_plan,
+            "needs": scan.get("needs"), "reasons": scan.get("reasons")}
+
+
+@app.get("/api/idosell/status")
+def idosell_status():
+    return jsonify({"configured": idosell_client.is_configured()})
+
+
+@app.post("/api/idosell/scan")
+def idosell_scan_start():
+    fresh = request.args.get("fresh") == "1"
+    with ido_scan_lock:
+        if ido_scan_state.get("status") == "running":
+            return jsonify({"status": "running"})
+        prev = ido_scan_state.get("status")
+        ido_scan_state.update(status="running", error=None)
+        if fresh or prev == "done":
+            ido_scan_state["results"] = {}
+            ido_scan_state["checked"] = 0
+            ido_scan_state["total"] = 0
+        # bez fresh: wznowienie - sprawdzone produkty zostaja pominiete
+    threading.Thread(target=ido_scan_worker, daemon=True).start()
+    return jsonify({"status": "running"})
+
+
+@app.post("/api/idosell/scan/stop")
+def idosell_scan_stop():
+    with ido_scan_lock:
+        if ido_scan_state.get("status") == "running":
+            ido_scan_state["status"] = "stopped"
+    save_ido_scan_state()
+    return jsonify({"status": ido_scan_state["status"]})
+
+
+@app.get("/api/idosell/scan/status")
+def idosell_scan_status():
+    with ido_scan_lock:
+        needs = sum(1 for r in ido_scan_state["results"].values()
+                    if r.get("needs"))
+        return jsonify({
+            "status": ido_scan_state.get("status"),
+            "checked": ido_scan_state.get("checked", 0),
+            "total": ido_scan_state.get("total", 0),
+            "needs": needs,
+            "error": ido_scan_state.get("error"),
+        })
+
+
+@app.get("/api/idosell/scan/results")
+def idosell_scan_results():
+    offset = int(request.args.get("offset", 0))
+    limit = int(request.args.get("limit", 20))
+    with ido_scan_lock:
+        rows = [{"id": pid, "name": r["name"], "code": r.get("code"),
+                 "image": r["image"], "images_count": r.get("images_count")}
+                for pid, r in ido_scan_state["results"].items()
+                if r.get("needs")]
+    page = rows[offset:offset + limit]
+    for p in page:
+        p.update(ido_local_flags(p["id"]))
+        p["archived_tag"] = False
+        p["deleted"] = False
+    return jsonify({"products": page, "total": len(rows)})
+
+
+def _ido_row_ui(p: dict) -> dict:
+    first = p["images"][0] if p.get("images") else None
+    return {
+        "id": p["id"], "code": p.get("code"), "name": p.get("name"),
+        "image": first["thumb"] if first else None,
+        "images_count": p.get("images_count"),
+        "archived_tag": p.get("archived_tag", False),
+        "deleted": p.get("deleted", False),
+    }
+
+
+@app.get("/api/idosell/products")
+def idosell_products():
+    """Listing: bez query - kolejne strony skanu (active bez tagu Archiwum);
+    z query - wyszukiwarka ID/kod (takze otagowane i usuniete)."""
+    query = request.args.get("query", "").strip()
+    offset = int(request.args.get("offset", 0))
+    limit = int(request.args.get("limit", 20))
+    try:
+        if query:
+            data = idosell_client.find_products(query, limit=50)
+            rows = [_ido_row_ui(p) for p in data["products"]][offset:offset + limit]
+            total = data["total"]
+        else:
+            page = idosell_client.scan_page(offset // limit, limit)
+            rows = [_ido_row_ui(p) for p in page["products"]]
+            total = page["total"]
+    except idosell_client.IdoSellError as e:
+        return jsonify({"error": str(e)}), 400
+    for p in rows:
+        p.update(ido_local_flags(p["id"]))
+    return jsonify({"products": rows, "total": total})
+
+
+@app.get("/api/idosell/products/<int:product_id>/images")
+def idosell_product_images(product_id):
+    """Zdjecia produktu + sugestia akcji per zdjecie (jak w Allegro):
+    biale tlo -> obrob, kolorowe -> prawdopodobnie stylizacja -> zostaw."""
+    try:
+        images = idosell_client.get_product_images(product_id)
+    except idosell_client.IdoSellError as e:
+        return jsonify({"error": str(e)}), 400
+    suggestions = []
+    for img in images:
+        suggest = "process"
+        try:
+            thumb = idosell_client.download_image(img["thumb"])
+            if analyze_thumb(thumb)["white"] < 0.40:
+                suggest = "keep"
+        except Exception:
+            pass
+        suggestions.append(suggest)
+    return jsonify({"images": images, "suggestions": suggestions})
+
+
+@app.post("/api/idosell/products/<int:product_id>/process")
+def idosell_product_process(product_id):
+    """Wykonuje decyzje per zdjecie: 'process' -> kolejka obrobki,
+    'keep'/'delete' -> tylko zapis w planie (done/{productId}/plan.json).
+    NIC nie jest wysylane do IdoSell - zapis wykona faza 2 wg planu."""
+    options = parse_options(request.form)
+    try:
+        decisions = json.loads(request.form.get("decisions", "[]"))
+    except json.JSONDecodeError:
+        return jsonify({"error": "Nieprawidlowy format decyzji"}), 400
+    if not decisions:  # brak wyboru = obrob wszystkie
+        try:
+            images = idosell_client.get_product_images(product_id)
+        except idosell_client.IdoSellError as e:
+            return jsonify({"error": str(e)}), 400
+        decisions = [{"url": i["url"], "image_id": i["id"], "slot": i["slot"],
+                      "action": "process"} for i in images]
+
+    out_dir = DONE_DIR / str(product_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    plan = {
+        "product_id": product_id,
+        "source": "idosell",
+        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        # kolejnosc listy = docelowa kolejnosc galerii; "index" = oryginalna
+        # pozycja (nazwy plikow), image_id/slot -> potrzebne w fazie 2
+        "decisions": [{"index": d.get("index", i + 1),
+                       "image_id": d.get("image_id"),
+                       "slot": d.get("slot"),
+                       "url": d["url"],
+                       "action": d["action"]}
+                      for i, d in enumerate(decisions)],
+    }
+    (out_dir / "plan.json").write_text(
+        json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    created = []
+    errors = []
+    for i, d in enumerate(decisions, 1):
+        if d.get("action") != "process":
+            continue
+        idx = d.get("index", i)
+        try:
+            data = idosell_client.download_image(d["url"])
+        except idosell_client.IdoSellError as e:
+            errors.append(f"zdjecie {idx}: {e}")
+            continue
+        created.append(submit_job(
+            f"{product_id}_{idx}.jpg", data, options, source="idosell"))
+    skipped = sum(1 for d in decisions if d.get("action") == "keep")
+    to_delete = sum(1 for d in decisions if d.get("action") == "delete")
+    return jsonify({"jobs": created, "errors": errors,
+                    "kept": skipped, "marked_delete": to_delete})
+
+
 class QuietPollingFilter(logging.Filter):
     """Wycisza w konsoli lokalne odpytki UI (statusy co 1.5s) -
     zostaja wpisy istotne: Allegro, logowania, bledy."""
-    NOISY = ("/api/jobs", "/api/allegro/scan/status", "/done/", "/originals/")
+    NOISY = ("/api/jobs", "/api/allegro/scan/status",
+             "/api/idosell/scan/status", "/done/", "/originals/")
 
     def filter(self, record):
         msg = record.getMessage()

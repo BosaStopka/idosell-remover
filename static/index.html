@@ -125,7 +125,7 @@
 
   .toolbar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
 
-  #cards, #allegroOffers { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 16px; }
+  #cards, #allegroOffers, #idoProducts { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 16px; }
   .card {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: var(--radius); overflow: hidden;
@@ -295,6 +295,7 @@
   </div>
   <nav class="tabs">
     <button class="tab active" data-tab="studio">Obróbka</button>
+    <button class="tab" data-tab="idosell">IdoSell</button>
     <button class="tab" data-tab="allegro">Allegro</button>
   </nav>
 </header>
@@ -376,6 +377,38 @@
     </section>
   </div>
 
+  <!-- ===== ZAKLADKA IDOSELL ===== -->
+  <div id="tab-idosell" class="hidden">
+    <div class="allegro-note">
+      🔒 Tryb bezpieczny: aplikacja czyta produkty sklepu <b>wyłącznie do odczytu</b>.
+      Obrobione zdjęcia lądują na dysku (done/), nic nie jest wysyłane do IdoSell.
+    </div>
+
+    <div class="panel" id="idoSetup">
+      <h2>Połączenie z IdoSell</h2>
+      <div id="idoSetupBody">Sprawdzanie...</div>
+    </div>
+
+    <div id="idoBrowser" class="hidden">
+      <div class="toolbar" style="align-items:center">
+        <button class="btn btn-ghost" id="idoScanBtn">🔍 Skanuj tła produktów</button>
+        <span id="idoScanInfo" style="font-size:13px;color:var(--muted)"></span>
+        <select id="idoViewMode" style="margin-left:auto">
+          <option value="all" selected>Wszystkie produkty (bez tagu Archiwum)</option>
+          <option value="needs">Tylko do obróbki (wynik skanu)</option>
+        </select>
+      </div>
+      <div class="searchbar">
+        <input type="text" id="idoSearch" placeholder="ID produktu lub fragment kodu (szuka też w tagu Archiwum i usuniętych)...">
+        <button class="btn btn-ghost" id="idoSearchBtn">Szukaj</button>
+      </div>
+      <div id="idoProducts"></div>
+      <div style="text-align:center;margin-top:18px">
+        <button class="btn btn-ghost hidden" id="idoMoreBtn">Pokaż więcej</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ===== ZAKLADKA ALLEGRO ===== -->
   <div id="tab-allegro" class="hidden">
     <div class="allegro-note">
@@ -446,9 +479,10 @@ async function tryLogin() {
 document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
   document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
   t.classList.add("active");
-  $("tab-studio").classList.toggle("hidden", t.dataset.tab !== "studio");
-  $("tab-allegro").classList.toggle("hidden", t.dataset.tab !== "allegro");
+  for (const name of ["studio", "idosell", "allegro"])
+    $(`tab-${name}`).classList.toggle("hidden", t.dataset.tab !== name);
   if (t.dataset.tab === "allegro") allegroStatus();
+  if (t.dataset.tab === "idosell") idosellStatus();
 }));
 
 // ---------- opcje ----------
@@ -556,7 +590,8 @@ $("clearBtn").addEventListener("click", async () => {
 });
 
 // ---------- stan zadan ----------
-let polling = null, lastJobs = [], lastJobsKey = "", hadActiveAllegro = false;
+let polling = null, lastJobs = [], lastJobsKey = "", hadActiveAllegro = false,
+    hadActiveIdo = false;
 async function refresh() {
   let fresh;
   try {
@@ -572,9 +607,13 @@ async function refresh() {
   const active = fresh.some(j => j.status === "queued" || j.status === "processing");
   const activeAllegro = fresh.some(j => j.source === "allegro" &&
     (j.status === "queued" || j.status === "processing"));
-  // obrobka zdjec z Allegro wlasnie sie skonczyla -> odswiez plakietki ofert
+  const activeIdo = fresh.some(j => j.source === "idosell" &&
+    (j.status === "queued" || j.status === "processing"));
+  // obrobka zdjec z Allegro/IdoSell wlasnie sie skonczyla -> odswiez plakietki
   if (hadActiveAllegro && !activeAllegro) loadOffers(true);
   hadActiveAllegro = activeAllegro;
+  if (hadActiveIdo && !activeIdo) loadIdoProducts(true);
+  hadActiveIdo = activeIdo;
   if (!active && polling) { clearInterval(polling); polling = null; }
 }
 function startPolling() {
@@ -618,10 +657,12 @@ function render() {
   for (const [pid, gjobs] of groups) {
     const doneCount = gjobs.filter(j => j.status === "done").length;
     const isAllegro = gjobs.some(j => j.source === "allegro");
+    const isIdo = gjobs.some(j => j.source === "idosell");
     html += `<div class="group-head">
       <h3>📁 ${esc(pid)}</h3>
       <span class="badge">${doneCount}/${gjobs.length} gotowych</span>
       ${isAllegro ? `<span class="badge allegro">Allegro</span>` : ""}
+      ${isIdo ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">IdoSell</span>` : ""}
     </div>`;
     for (const j of gjobs) {
       const [label, cls] = STATUS[j.status] || [j.status, ""];
@@ -796,6 +837,7 @@ async function processOffer(id, btn) {
   }
   pickState = {
     offerId: id,
+    source: "allegro",
     items: data.images.map((u, i) => ({
       url: u,
       action: (data.suggestions || [])[i] || "process",
@@ -810,7 +852,8 @@ async function processOffer(id, btn) {
 
 function renderPick() {
   const batchInfo = batchQueue.length ? ` · w kolejce wyboru: ${batchQueue.length}` : "";
-  $("pickTitle").textContent = `Oferta ${pickState.offerId} - ${pickState.items.length} zdjęć${batchInfo}`;
+  const kind = pickState.source === "idosell" ? "Produkt" : "Oferta";
+  $("pickTitle").textContent = `${kind} ${pickState.offerId} - ${pickState.items.length} zdjęć${batchInfo}`;
   $("pickGrid").innerHTML = pickState.items.map((it, i) => `
     <div class="pick act-${it.action}">
       <div class="thumb"><img src="${esc(it.url)}" loading="lazy">
@@ -858,9 +901,12 @@ $("pickGo").addEventListener("click", async () => {
   const fd = optionsForm(new FormData());
   fd.append("decisions", JSON.stringify(pickState.items));
   $("pickGo").disabled = true; $("pickGo").textContent = "Wysyłanie...";
+  const processUrl = pickState.source === "idosell"
+    ? `/api/idosell/products/${pickState.offerId}/process`
+    : `/api/allegro/offers/${pickState.offerId}/process`;
   let data;
   try {
-    const res = await api(`/api/allegro/offers/${pickState.offerId}/process`, { method: "POST", body: fd });
+    const res = await api(processUrl, { method: "POST", body: fd });
     data = await res.json();
   } catch { data = { error: "Błąd połączenia" }; }
   $("pickGo").disabled = false; $("pickGo").textContent = "Wykonaj";
@@ -1062,6 +1108,141 @@ async function rollbackPlan() {
   $("planBody").innerHTML = `<p style="color:var(--ok);font-size:15px">↩ Przywrócono ${data.restored} poprzednich zdjęć oferty.</p>`;
   loadOffers(true);
 }
+
+// ---------- IdoSell ----------
+let idoOffset = 0;
+
+async function idosellStatus() {
+  let st;
+  try {
+    const res = await api("/api/idosell/status");
+    st = await res.json();
+  } catch { return; }
+  const body = $("idoSetupBody");
+  if (!st.configured) {
+    $("idoBrowser").classList.add("hidden");
+    body.innerHTML = `
+      <p style="font-size:14px;line-height:1.7;color:var(--muted)">
+        Brak konfiguracji. Wygeneruj klucz API w panelu IdoSell
+        (Administracja → API) i uzupełnij plik
+        <b style="color:var(--text)">idosell_config.json</b> w katalogu aplikacji:</p>
+      <pre style="background:var(--panel2);padding:12px;border-radius:8px;margin-top:10px;font-size:13px">{
+  "api_key": "..."
+}</pre>`;
+    return;
+  }
+  body.innerHTML = `<span class="badge done">Połączono z IdoSell (bosastopka.pl)</span>
+    <span class="badge" style="margin-left:6px">faza 1: tylko odczyt</span>`;
+  $("idoBrowser").classList.remove("hidden");
+  if (!$("idoProducts").innerHTML) loadIdoProducts(true);
+  idoScanStatus();
+}
+
+async function loadIdoProducts(reset) {
+  if (reset) { idoOffset = 0; $("idoProducts").innerHTML = `<div class="empty">Ładowanie...</div>`; }
+  const params = new URLSearchParams({ offset: idoOffset, limit: 20 });
+  let endpoint = "/api/idosell/products";
+  if ($("idoViewMode").value === "needs") {
+    endpoint = "/api/idosell/scan/results";
+  } else {
+    const q = $("idoSearch").value.trim();
+    if (q) params.set("query", q);
+  }
+  let data;
+  try {
+    const res = await api(`${endpoint}?${params}`);
+    data = await res.json();
+  } catch { return; }
+  if (data.error) {
+    $("idoProducts").innerHTML = `<div class="empty" style="color:var(--err)">${esc(data.error)}</div>`;
+    return;
+  }
+  let html = reset ? "" : $("idoProducts").innerHTML;
+  for (const p of data.products) {
+    html += `<div class="card">
+      <div class="thumb white">${p.image ? `<img src="${esc(p.image)}">` : `<span style="font-size:26px">🖼</span>`}</div>
+      <div class="card-body">
+        <span class="card-name">${esc(p.name || "(bez nazwy)")}</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <span class="badge">ID: ${esc(p.id)}</span>
+          ${p.code ? `<span class="badge">kod: ${esc(p.code)}</span>` : ""}
+          <span class="badge">zdjęć: ${p.images_count ?? "-"}</span>
+          ${p.archived_tag ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">🏷 tag Archiwum</span>` : ""}
+          ${p.deleted ? `<span class="badge error">🗃 usunięty</span>` : ""}
+          ${p.needs === true ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">${(p.reasons || []).includes("proporcje") ? "✂ " : "🎨 "}do obróbki${(p.reasons || []).length ? ": " + p.reasons.join("+").replace("tlo", "tło") : ""}</span>` : ""}
+          ${p.needs === false ? `<span class="badge" style="color:var(--ok)">tło OK</span>` : ""}
+          ${p.processed ? `<span class="badge done">✓ obrobione</span>` : ""}
+          ${p.plan && !p.processed ? `<span class="badge">📋 plan</span>` : ""}
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost" style="flex:1" onclick="processIdoProduct('${esc(p.id)}', this)">🪄 Obrób zdjęcia</button>
+        </div>
+      </div></div>`;
+  }
+  $("idoProducts").innerHTML = html || `<div class="empty">Brak produktów</div>`;
+  idoOffset += data.products.length;
+  $("idoMoreBtn").classList.toggle("hidden", idoOffset >= data.total);
+}
+
+async function processIdoProduct(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Wczytywanie..."; }
+  let data;
+  try {
+    const res = await api(`/api/idosell/products/${id}/images`);
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (btn) { btn.disabled = false; btn.textContent = "🪄 Obrób zdjęcia"; }
+  if (data.error) { alert(data.error); return; }
+  pickState = {
+    offerId: id,
+    source: "idosell",
+    items: data.images.map((im, i) => ({
+      url: im.url,
+      image_id: im.id,
+      slot: im.slot,
+      action: (data.suggestions || [])[i] || "process",
+      suggested: (data.suggestions || [])[i] === "keep",
+      index: i + 1,
+    })),
+    btn,
+  };
+  renderPick();
+  $("pickOverlay").classList.remove("hidden");
+}
+
+let idoScanPoll = null;
+async function idoScanStatus() {
+  let st;
+  try {
+    const res = await api("/api/idosell/scan/status");
+    st = await res.json();
+  } catch { return; }
+  const info = $("idoScanInfo");
+  if (st.status === "running") {
+    info.textContent = `Skanowanie: ${st.checked}/${st.total || "?"} · do obróbki: ${st.needs}`;
+    $("idoScanBtn").textContent = "⏹ Zatrzymaj skan";
+    if (!idoScanPoll) idoScanPoll = setInterval(idoScanStatus, 2500);
+  } else {
+    if (idoScanPoll) { clearInterval(idoScanPoll); idoScanPoll = null; }
+    $("idoScanBtn").textContent = "🔍 Skanuj tła produktów";
+    if (st.status === "done") info.textContent = `Skan zakończony: ${st.checked} produktów, do obróbki: ${st.needs}`;
+    else if (st.status === "stopped") info.textContent = `Skan zatrzymany (${st.checked} sprawdzonych, do obróbki: ${st.needs})`;
+    else if (st.status === "error") info.textContent = `Błąd skanu: ${st.error || ""}`;
+    else if (st.needs > 0) info.textContent = `Poprzedni skan: do obróbki ${st.needs}`;
+  }
+}
+$("idoScanBtn").addEventListener("click", async () => {
+  if ($("idoScanBtn").textContent.includes("Zatrzymaj")) {
+    await api("/api/idosell/scan/stop", { method: "POST" });
+  } else {
+    await api("/api/idosell/scan", { method: "POST" });
+  }
+  idoScanStatus();
+});
+$("idoViewMode").addEventListener("change", () => loadIdoProducts(true));
+$("idoSearchBtn").addEventListener("click", () => loadIdoProducts(true));
+$("idoSearch").addEventListener("keydown", e => { if (e.key === "Enter") loadIdoProducts(true); });
+$("idoMoreBtn").addEventListener("click", () => loadIdoProducts(false));
 
 // ---------- skan tla ----------
 let scanPoll = null;
