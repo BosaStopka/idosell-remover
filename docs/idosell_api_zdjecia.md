@@ -20,7 +20,32 @@ Body (minimalne):
   }
 }
 ```
-Filtrowanie też po: indeksach/kodach (productIndexes, searchByCodes itd. - do potwierdzenia w kroku 0).
+### Filtrowanie (ZWERYFIKOWANE empirycznie, krok 0 - 2026-06-12)
+
+- **Po ID**: `"productParams": [{"productId": 334}]` - lista obiektów!
+  Wariant `"productParams": {"productIds": [...]}` jest po cichu IGNOROWANY
+  i zwraca wszystkie produkty.
+- **Po kodzie/fragmencie kodu**: `"containsCodePart": "636401"` (szuka też
+  w kodzie producenta).
+- **Wykluczenie tagu Archiwum**: `"productParametersParams":
+  [{"productParameterIds": {"productParameterIdsDisabled": [2386]}}]`
+  (2386 = wartość "Archiwum" parametru Product Tag, parameterId 993;
+  id konfigurowalne w idosell_config.json jako archive_tag_value_id).
+  Filtrowanie po NAZWACH parametru/wartości jest niewiarygodne (zwraca
+  produkty z jakimkolwiek Product Tag) - używać wyłącznie ID.
+- **`returnProducts`**: "active" / "deleted" (= archiwum IdoSell) /
+  "in_trash". UWAGA: przy "deleted" filtry serwera NIE działają
+  (by id zwraca 0 dla istniejących, containsCodePart jest ignorowany
+  i zwraca wszystko) - trzeba przeglądać strony i filtrować po stronie
+  klienta (robi to idosell_client._find_deleted).
+- Pusty wynik = HTTP 207 + `errors.faultCode 2` ("zwrócono pusty wynik"),
+  nie traktować jako błąd.
+- `lang_data` w returnElements daje productName (pol) + opisy (ciężkie).
+- Paginacja: `resultsNumberAll` (produkty), `resultsNumberPage` (LICZBA
+  STRON przy danym limicie), sterowanie resultsPage/resultsLimit.
+
+Stan sklepu (2026-06-12): 4032 active (1703 z tagiem Archiwum, 2329 bez),
+769 deleted, 0 in_trash. Zakres skanu = active bez tagu = 2329.
 
 Odpowiedź - per produkt tablica `productImages`:
 - `productImageId` (string) - ID zdjęcia (potrzebne do delete)
