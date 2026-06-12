@@ -97,6 +97,22 @@ Uwagi:
 - Limit wymiarów: 4000x4000 px.
 - Statusy: 200 OK, 207 Multi-Status (część się nie udała!), 429 rate limit.
 
+## 2b. Ikony produktu (3 sloty nad galerią w panelu)
+
+Mapowanie (ZWERYFIKOWANE 2026-06-12):
+- "Zdjęcie na liście towarów" = `productIconType: "shop"` (odczyt: `productIcon`)
+- "Zdjęcie dla towaru w grupie" = `"group"` (odczyt: `productGroupIcon`)
+- "Zdjęcie bez tła" = `"auction"` (odczyt: `productAuctionIcon`)
+
+Zapis: ta sama operacja `PUT /products/images` - obok `productImages`
+tablica `productIcons` (`productIconSource` base64, `productIconType`,
+`deleteProductIcon`). Kasowanie ikony: `deleteProductIcon: true`.
+
+Odczyt: search zna tylko returnElement `icon` (ikona shop)!
+Wszystkie 3 zwraca `GET /products/products?productIds=N`.
+UWAGA: URL-e ikon auction/group przychodzą BEZ domeny ("hpeciai/...")
+- trzeba dokleić origin sklepu (robi to idosell_client.get_product_icons).
+
 ## 3. Kasowanie zdjęć
 
 `POST /products/images/delete`
