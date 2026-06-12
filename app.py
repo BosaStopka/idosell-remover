@@ -74,7 +74,10 @@ def _auth_cookie_value() -> str:
 
 
 def _is_logged_in() -> bool:
-    return request.cookies.get("bs_auth") == _auth_cookie_value()
+    # bs_auth_ido, nie bs_auth: przegladarka nie rozroznia portow przy
+    # ciasteczkach, wiec wspolna nazwa z bg-removerem (port 5000)
+    # wylogowywala by jedna aplikacje przy logowaniu do drugiej
+    return request.cookies.get("bs_auth_ido") == _auth_cookie_value()
 
 
 @app.before_request
@@ -96,7 +99,7 @@ def api_login():
         time.sleep(1)  # spowolnienie zgadywania
         return jsonify({"ok": False}), 403
     resp = make_response(jsonify({"ok": True}))
-    resp.set_cookie("bs_auth", _auth_cookie_value(), httponly=True,
+    resp.set_cookie("bs_auth_ido", _auth_cookie_value(), httponly=True,
                     samesite="Strict", max_age=30 * 24 * 3600)
     return resp
 
