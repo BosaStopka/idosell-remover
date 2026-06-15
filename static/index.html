@@ -6,30 +6,45 @@
 <title>Bosa Stopka - Studio Zdjęć</title>
 <style>
   :root {
-    --bg: #0f1117;
-    --panel: #181b25;
-    --panel2: #1f2330;
-    --border: #2a2f40;
-    --text: #e8eaf2;
-    --muted: #8b91a7;
-    --accent: #6c5ce7;
-    --accent2: #00cec9;
-    --ok: #00b894;
-    --err: #e17055;
-    --radius: 14px;
+    --bg: #0b0d13;
+    --panel: #151824;
+    --panel2: #1c2031;
+    --border: #2a2f43;
+    --text: #eceefb;
+    --muted: #8b92ab;
+    --accent: #7c6cff;
+    --accent2: #19e3d6;
+    --ok: #15c98e;
+    --err: #ff6b5e;
+    --radius: 16px;
+    --shadow: 0 10px 30px rgba(0,0,0,.38);
+    --shadow-sm: 0 2px 10px rgba(0,0,0,.28);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    background: var(--bg);
+    background:
+      radial-gradient(1100px 520px at 18% -8%, rgba(124,108,255,.16), transparent 60%),
+      radial-gradient(900px 480px at 105% 0%, rgba(25,227,214,.10), transparent 55%),
+      var(--bg);
+    background-attachment: fixed;
     color: var(--text);
     font-family: "Segoe UI", system-ui, sans-serif;
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
+  .qa-filter {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 13px;
+    color: var(--muted); cursor: pointer; padding: 9px 14px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--panel2);
+  }
+  .qa-filter input { accent-color: #ff8a3d; }
   header {
-    padding: 18px 32px;
+    padding: 16px 32px;
     display: flex; align-items: center; gap: 14px;
     border-bottom: 1px solid var(--border);
-    background: linear-gradient(135deg, rgba(108,92,231,.12), rgba(0,206,201,.06));
+    background: linear-gradient(135deg, rgba(124,108,255,.14), rgba(25,227,214,.05));
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(10px);
   }
   .logo {
     width: 42px; height: 42px; border-radius: 12px;
@@ -42,9 +57,12 @@
   .tab {
     padding: 9px 18px; border-radius: 10px; font-size: 14px; cursor: pointer;
     border: 1px solid transparent; color: var(--muted); background: none;
+    transition: color .15s, background .15s, border-color .15s;
   }
+  .tab:hover { color: var(--text); }
   .tab.active {
     color: var(--text); border-color: var(--border); background: var(--panel);
+    box-shadow: var(--shadow-sm);
   }
   main {
     max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px;
@@ -54,7 +72,7 @@
 
   .panel {
     background: var(--panel); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 20px;
+    border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow-sm);
   }
   .panel h2 {
     font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
@@ -114,8 +132,9 @@
   .btn:active { transform: scale(.98); }
   .btn-primary {
     background: linear-gradient(135deg, var(--accent), var(--accent2));
-    color: #fff;
+    color: #fff; box-shadow: 0 6px 18px rgba(124,108,255,.28);
   }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.07); }
   .btn-primary:disabled { opacity: .35; cursor: default; }
   .btn-ghost {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border);
@@ -130,6 +149,12 @@
     background: var(--panel); border: 1px solid var(--border);
     border-radius: var(--radius); overflow: hidden;
     display: flex; flex-direction: column;
+    transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+  }
+  .card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow);
+    border-color: #3a4060;
   }
   .thumb {
     aspect-ratio: 1; background:
@@ -442,6 +467,7 @@
       <div class="toolbar">
         <button class="btn btn-ghost" id="zipBtn">⬇ Pobierz wszystko (ZIP)</button>
         <button class="btn btn-ghost" id="clearBtn">🧹 Wyczyść zakończone</button>
+        <label class="qa-filter"><input type="checkbox" id="qaOnly"> ⚠ Tylko z uwagami QA</label>
       </div>
       <div id="cards"><div class="empty">Dodaj zdjęcia, aby zacząć</div></div>
     </section>
@@ -463,6 +489,7 @@
       <div class="toolbar" style="align-items:center">
         <button class="btn btn-ghost" id="idoScanBtn">🔍 Skanuj tła produktów</button>
         <span id="idoScanInfo" style="font-size:13px;color:var(--muted)"></span>
+        <button class="btn btn-primary hidden" id="idoBatchBtn">🪄 Obrób zaznaczone</button>
         <select id="idoViewMode" style="margin-left:auto">
           <option value="all" selected>Wszystkie produkty (bez tagu Archiwum)</option>
           <option value="needs">Tylko do obróbki (wynik skanu)</option>
@@ -656,6 +683,7 @@ goBtn.addEventListener("click", async () => {
   startPolling();
   render();
 });
+$("qaOnly").addEventListener("change", e => { qaOnly = e.target.checked; render(); });
 $("zipBtn").addEventListener("click", () => location.href = "/api/zip");
 $("clearBtn").addEventListener("click", async () => {
   await api("/api/clear", { method: "POST" }); refresh();
@@ -700,6 +728,8 @@ const STATUS = {
   error: ["Błąd", "error"],
 };
 
+const QA_LBL = { tlo: "tło", maly: "za mały", proporcje: "proporcje", fragmenty: "fragmenty", pusta: "pusta maska" };
+let qaOnly = false;
 const collapsedGroups = new Set();
 function toggleGroup(pid) {
   if (collapsedGroups.has(pid)) collapsedGroups.delete(pid);
@@ -735,6 +765,8 @@ function render() {
   }
   for (const [pid, gjobs] of groups) {
     const doneCount = gjobs.filter(j => j.status === "done").length;
+    const flagged = gjobs.filter(j => j.status === "done" && j.qa && !j.qa.ok).length;
+    if (qaOnly && !flagged) continue;   // filtr: tylko grupy z uwagami QA
     const isAllegro = gjobs.some(j => j.source === "allegro");
     const isIdo = gjobs.some(j => j.source === "idosell");
     const collapsed = collapsedGroups.has(pid);
@@ -743,6 +775,8 @@ function render() {
       <button class="grp-toggle" onclick="toggleGroup('${esc(pid)}')" title="Zwiń / rozwiń">${collapsed ? "▸" : "▾"}</button>
       <h3>📁 ${esc(pid)}</h3>
       <span class="badge">${doneCount}/${gjobs.length} gotowych</span>
+      ${flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ ${flagged} do przeglądu</span>`
+                : (allDone && doneCount ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">✓ QA OK</span>` : "")}
       ${isAllegro ? `<span class="badge allegro">Allegro</span>` : ""}
       ${isIdo ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">IdoSell</span>` : ""}
       ${isIdo ? `<button class="btn btn-ghost" style="margin-left:auto;padding:6px 12px;font-size:12px" ${allDone ? "" : "disabled title='Najpierw dokończ obróbkę'"} onclick="openIdoPlan('${esc(pid)}')">📤 Wyślij do IdoSell</button>` : ""}
@@ -772,6 +806,8 @@ function render() {
           <span class="card-name">${esc(j.name)}</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             <span class="badge ${cls}">${label}${j.seconds ? " · " + j.seconds + "s" : ""}</span>
+            ${j.status === "done" && j.qa && !j.qa.ok ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d" title="Auto-kontrola jakości">⚠ ${j.qa.issues.map(x => QA_LBL[x] || x).join(", ")}</span>` : ""}
+            ${j.status === "done" && j.qa && j.qa.ok ? `<span class="badge" style="color:var(--ok)" title="Auto-kontrola jakości OK">✓ QA</span>` : ""}
           </div>
           <div style="display:flex;gap:10px;align-items:center">
             ${j.status === "done" ? `<a href="/done/${j.result}" download>Pobierz JPG</a>` : ""}
@@ -1377,6 +1413,34 @@ async function rollbackPlan() {
   loadOffers(true);
 }
 
+// ---------- IdoSell: multi-select + obróbka wsadowa ----------
+const selectedIdo = new Set();
+function toggleIdo(id, on) {
+  if (on) selectedIdo.add(String(id)); else selectedIdo.delete(String(id));
+  const btn = $("idoBatchBtn");
+  btn.classList.toggle("hidden", !selectedIdo.size);
+  btn.textContent = `🪄 Obrób zaznaczone (${selectedIdo.size})`;
+}
+$("idoBatchBtn").addEventListener("click", async () => {
+  const ids = [...selectedIdo];
+  if (!ids.length) return;
+  if (!confirm(`Obrobić zdjęcia ${ids.length} produktów? Oryginały trafią do archiwum na D:, a wyniki na dysk (nic nie idzie jeszcze do IdoSell).`)) return;
+  $("idoBatchBtn").disabled = true; $("idoBatchBtn").textContent = "Kolejkowanie...";
+  const fd = optionsForm(new FormData());
+  fd.append("product_ids", JSON.stringify(ids));
+  let data;
+  try {
+    const res = await api("/api/idosell/bulk-process", { method: "POST", body: fd });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  $("idoBatchBtn").disabled = false;
+  if (data.error) { alert(data.error); toggleIdo("", false); return; }
+  selectedIdo.clear(); toggleIdo("", false);
+  loadIdoProducts(true);
+  if (data.total_jobs) { startPolling(); document.querySelector('.tab[data-tab="studio"]').click(); }
+  if (data.failed) alert(`Zakolejkowano ${data.ok}, błędy: ${data.failed} (produkty bez zdjęć lub niedostępne).`);
+});
+
 // ---------- edytor maski (pędzel) ----------
 const ed = {
   jobId: null, rgb: null, mask: null, maskCtx: null, tmp: null, tmpCtx: null,
@@ -1604,8 +1668,12 @@ async function loadIdoProducts(reset) {
   }
   let html = reset ? "" : $("idoProducts").innerHTML;
   for (const p of data.products) {
+    const checked = selectedIdo.has(String(p.id)) ? "checked" : "";
     html += `<div class="card">
-      <div class="thumb white">${p.image ? `<img src="${esc(p.image)}">` : `<span style="font-size:26px">🖼</span>`}</div>
+      <div class="thumb white">${p.image ? `<img src="${esc(p.image)}">` : `<span style="font-size:26px">🖼</span>`}
+        <input type="checkbox" class="offer-check" data-id="${esc(p.id)}" ${checked}
+          onchange="toggleIdo('${esc(p.id)}', this.checked)">
+      </div>
       <div class="card-body">
         <span class="card-name">${esc(p.name || "(bez nazwy)")}</span>
         <div style="display:flex;gap:6px;flex-wrap:wrap">

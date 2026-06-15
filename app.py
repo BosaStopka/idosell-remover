@@ -115,7 +115,7 @@ def extract_product_id(stem: str) -> str:
 
 
 PERSIST_KEYS = ("id", "name", "status", "result", "error", "source",
-                "orig", "options", "seconds", "editable")
+                "orig", "options", "seconds", "editable", "qa")
 
 
 def persist_jobs():
@@ -149,6 +149,49 @@ def submit_job(name: str, data: bytes, options: dict, source: str = "upload") ->
     return job_id
 
 
+def qa_check(out_img, alpha, full_bleed: bool) -> dict:
+    """Auto-kontrola jakosci wyniku obrobki - flaguje grube bledy maski,
+    zeby przegladu wymagaly tylko podejrzane zdjecia. Niski falszywy alarm:
+    - 'maly'      obiekt zajmuje za malo kadru (zle zrodlo / przyciecie),
+    - 'fragmenty' kilka duzych rozlacznych plam (szum/cien jako produkt),
+    - 'proporcje' skrajnie wydluzony obiekt,
+    - 'tlo'       niebiale narozniki wyniku (resztka tla; nie dla detali).
+    """
+    import numpy as np
+    from scipy import ndimage
+
+    issues = []
+    a = np.asarray(alpha) > 128
+    if not a.any():
+        return {"ok": False, "issues": ["pusta"]}
+    cov = float(a.mean())
+    if cov < 0.10:
+        issues.append("maly")
+
+    ys, xs = np.where(a)
+    bw, bh = xs.max() - xs.min() + 1, ys.max() - ys.min() + 1
+    ar = bw / bh if bh else 1
+    if ar > 3.3 or ar < 0.30:
+        issues.append("proporcje")
+
+    labeled, n = ndimage.label(a)
+    if n > 1:
+        sizes = ndimage.sum(a, labeled, range(1, n + 1))
+        big = int((sizes >= sizes.max() * 0.05).sum())
+        if big >= 3:
+            issues.append("fragmenty")
+
+    if not full_bleed:
+        arr = np.asarray(out_img.convert("RGB"))
+        h, w = arr.shape[:2]
+        c = max(4, int(min(h, w) * 0.05))
+        corners = [arr[:c, :c], arr[:c, -c:], arr[-c:, :c], arr[-c:, -c:]]
+        white = min(float((p >= 244).all(axis=2).mean()) for p in corners)
+        if white < 0.97:
+            issues.append("tlo")
+    return {"ok": not issues, "issues": issues}
+
+
 def worker():
     while True:
         job_id = queue.get()
@@ -180,11 +223,16 @@ def worker():
                 work_alpha.save(MASKS_DIR / f"{job_id}.a.png")
             except OSError:
                 pass
+            try:
+                qa = qa_check(img, work_alpha, full_bleed)
+            except Exception:
+                qa = {"ok": True, "issues": []}
             with lock:
                 job["status"] = "done"
                 job["result"] = f"{pid}/{stem}.jpg"
                 job["seconds"] = round(time.time() - t0, 1)
                 job["editable"] = True
+                job["qa"] = qa
                 job["data"] = None
         except Exception as e:
             with lock:
@@ -269,7 +317,7 @@ def api_jobs():
             j = jobs[jid]
             out.append({k: j.get(k) for k in
                         ("id", "name", "status", "result", "error",
-                         "source", "orig", "seconds", "editable")})
+                         "source", "orig", "seconds", "editable", "qa")})
     return jsonify(out)
 
 
@@ -380,10 +428,17 @@ def api_recompose(job_id):
         out_path.parent.mkdir(parents=True, exist_ok=True)
         img.save(out_path, "JPEG", quality=95)
         alpha.save(MASKS_DIR / f"{job_id}.a.png")  # utrwal poprawiona maske
+        try:
+            rgba = rgb.convert("RGB").copy()
+            rgba.putalpha(alpha)
+            qa = qa_check(img, alpha, pipeline.is_full_bleed(rgba))
+        except Exception:
+            qa = {"ok": True, "issues": []}
         with lock:
             job["seconds"] = round(time.time() - t0, 1)
+            job["qa"] = qa
         persist_jobs()
-        return jsonify({"ok": True, "result": job["result"]})
+        return jsonify({"ok": True, "result": job["result"], "qa": qa})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1345,6 +1400,64 @@ def idosell_product_process(product_id):
     return jsonify({"jobs": created, "errors": errors,
                     "kept": skipped, "marked_delete": to_delete,
                     "archive": archive})
+
+
+def _ido_process_default(product_id: int, options: dict) -> dict:
+    """Obrobka wsadowa jednego produktu z domyslnym planem: wszystkie
+    zdjecia 'Obrob', zdjecie #1 -> ikona Listy + Grupy. Archiwum + plan +
+    kolejka. Zwraca {ok, jobs, error}."""
+    archive_originals(product_id)
+    try:
+        images = idosell_client.get_product_images(product_id)
+    except idosell_client.IdoSellError as e:
+        return {"ok": False, "error": str(e), "jobs": 0}
+    if not images:
+        return {"ok": False, "error": "produkt bez zdjec", "jobs": 0}
+
+    decisions = [{"index": i + 1, "image_id": im["id"], "slot": im["slot"],
+                  "url": im["url"], "action": "process", "mirror": False,
+                  "icons": ["shop", "group"] if i == 0 else []}
+                 for i, im in enumerate(images)]
+    out_dir = DONE_DIR / str(product_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "plan.json").write_text(json.dumps({
+        "product_id": product_id, "source": "idosell",
+        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "decisions": decisions,
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    jobs_made = 0
+    for d in decisions:
+        try:
+            data = idosell_client.download_image(d["url"])
+        except idosell_client.IdoSellError:
+            continue
+        submit_job(f"{product_id}_{d['index']}.jpg", data,
+                   {**options, "mirror": False}, source="idosell")
+        jobs_made += 1
+    return {"ok": jobs_made > 0, "jobs": jobs_made,
+            "error": None if jobs_made else "nie pobrano zdjec"}
+
+
+@app.post("/api/idosell/bulk-process")
+def idosell_bulk_process():
+    """Masowa obrobka wielu produktow naraz (domyslny plan per produkt).
+    Body form: product_ids (JSON lista) + opcje obrobki."""
+    options = parse_options(request.form)
+    try:
+        ids = [int(x) for x in json.loads(request.form.get("product_ids", "[]"))]
+    except (json.JSONDecodeError, ValueError):
+        return jsonify({"error": "Nieprawidlowa lista produktow"}), 400
+    if not ids:
+        return jsonify({"error": "Pusta lista produktow"}), 400
+    results, total_jobs = [], 0
+    for pid in ids:
+        r = _ido_process_default(pid, options)
+        total_jobs += r["jobs"]
+        results.append({"id": pid, **r})
+    ok = sum(1 for r in results if r["ok"])
+    return jsonify({"results": results, "ok": ok,
+                    "failed": len(results) - ok, "total_jobs": total_jobs})
 
 
 # ------------- IdoSell FAZA 2: wykonanie planu (zapis do sklepu) -------------
