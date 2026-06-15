@@ -1373,6 +1373,9 @@ def idosell_products():
     sort = request.args.get("sort", "id_asc")
     view = request.args.get("view", "catalog")
     state = request.args.get("state", "all")
+    avail = request.args.get("avail")  # 'y' / 'n' / None
+    if avail not in ("y", "n"):
+        avail = None
     desc = sort == "id_desc"
     try:
         if view == "mine":
@@ -1391,27 +1394,37 @@ def idosell_products():
                 rows.append(base)
             return jsonify({"products": rows, "total": total})
 
-        if query:
-            data = idosell_client.find_products(query, limit=50)
+        if query and query.isdigit():
+            # ID: pelne wyszukanie (z fallbackiem do usunietych), cap 50
+            data = idosell_client.find_products(query, limit=50, availability=avail)
             rows = [_ido_row_ui(p) for p in data["products"]]
             rows.sort(key=lambda r: r["id"], reverse=desc)
             rows = rows[offset:offset + limit]
             total = data["total"]
+        elif query:
+            # nazwa/marka (np. "Bobux") lub kod - paginowane, pelny total
+            page_idx = offset // limit
+            res = idosell_client.search_active("text", query, page_idx, limit, avail)
+            if res["total"] == 0 and page_idx == 0:
+                res = idosell_client.search_active("code", query, 0, limit, avail)
+            rows = [_ido_row_ui(p) for p in res["products"]]
+            rows.sort(key=lambda r: r["id"], reverse=desc)
+            total = res["total"]
         elif desc:
-            total = idosell_client.scan_page(0, 1)["total"]
+            total = idosell_client.scan_page(0, 1, availability=avail)["total"]
             start = max(0, total - offset - limit)
             end = max(0, total - offset)
             asc = []
             if end > start:
                 p0, p1 = start // limit, (end - 1) // limit
                 for p in range(p0, p1 + 1):
-                    asc += idosell_client.scan_page(p, limit)["products"]
+                    asc += idosell_client.scan_page(p, limit, availability=avail)["products"]
                 window = list(reversed(asc[start - p0 * limit:end - p0 * limit]))
             else:
                 window = []
             rows = [_ido_row_ui(p) for p in window]
         else:
-            page = idosell_client.scan_page(offset // limit, limit)
+            page = idosell_client.scan_page(offset // limit, limit, availability=avail)
             rows = [_ido_row_ui(p) for p in page["products"]]
             total = page["total"]
     except idosell_client.IdoSellError as e:

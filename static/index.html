@@ -510,7 +510,12 @@
         </select>
       </div>
       <div class="searchbar">
-        <input type="text" id="idoSearch" placeholder="Wpisz ID produktu (sklepu) lub fragment kodu...">
+        <input type="text" id="idoSearch" placeholder="ID, kod lub nazwa/marka (np. Bobux, Froddo)...">
+        <select id="idoAvail">
+          <option value="" selected>Magazyn: wszystkie</option>
+          <option value="y">Dostępne</option>
+          <option value="n">Niedostępne</option>
+        </select>
         <select id="idoState" class="hidden">
           <option value="all" selected>Wszystkie moje</option>
           <option value="processed">Obrobione</option>
@@ -1757,6 +1762,7 @@ async function loadIdoProducts(reset) {
     const q = $("idoSearch").value.trim();
     if (q) params.set("query", q);
     params.set("sort", $("idoSort").value);
+    if ($("idoAvail").value) params.set("avail", $("idoAvail").value);
     if (vm === "mine") { params.set("view", "mine"); params.set("state", $("idoState").value); }
   }
   let data;
@@ -1863,6 +1869,7 @@ $("idoScanBtn").addEventListener("click", async () => {
 $("idoViewMode").addEventListener("change", () => loadIdoProducts(true));
 $("idoSort").addEventListener("change", () => loadIdoProducts(true));
 $("idoState").addEventListener("change", () => loadIdoProducts(true));
+$("idoAvail").addEventListener("change", () => loadIdoProducts(true));
 $("idoSearchBtn").addEventListener("click", () => loadIdoProducts(true));
 $("idoSearch").addEventListener("keydown", e => { if (e.key === "Enter") loadIdoProducts(true); });
 $("idoMoreBtn").addEventListener("click", () => loadIdoProducts(false));

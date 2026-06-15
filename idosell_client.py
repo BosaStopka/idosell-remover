@@ -176,9 +176,10 @@ def _product_row(prod: dict, with_tags: bool = False) -> dict:
     return row
 
 
-def scan_page(page: int = 0, limit: int = 100) -> dict:
-    """Jedna strona pelnego skanu: aktywne produkty bez tagu Archiwum."""
-    data = search_products({
+def scan_page(page: int = 0, limit: int = 100, availability: str = None) -> dict:
+    """Jedna strona pelnego skanu: aktywne produkty bez tagu Archiwum.
+    availability: 'y' (dostepne) / 'n' (niedostepne) / None (wszystkie)."""
+    params = {
         "returnProducts": "active",
         "returnElements": SCAN_RETURN_ELEMENTS,
         "productParametersParams": [{
@@ -188,7 +189,10 @@ def scan_page(page: int = 0, limit: int = 100) -> dict:
         }],
         "resultsPage": page,
         "resultsLimit": limit,
-    })
+    }
+    if availability in ("y", "n"):
+        params["productIsAvailable"] = availability
+    data = search_products(params)
     return {
         "total": data.get("resultsNumberAll", 0),
         "pages": data.get("resultsNumberPage", 0),
@@ -197,17 +201,23 @@ def scan_page(page: int = 0, limit: int = 100) -> dict:
     }
 
 
-def _find_active(query: str, by_id: bool, limit: int) -> list[dict]:
+def _find_active(query: str, field: str, limit: int,
+                 availability: str = None) -> list[dict]:
+    """field: 'id' (productId) | 'code' (fragment kodu) | 'text' (nazwa/opis)."""
     params = {
         "returnProducts": "active",
         "returnElements": SCAN_RETURN_ELEMENTS + ["parameters"],
         "resultsPage": 0,
         "resultsLimit": limit,
     }
-    if by_id:
+    if field == "id":
         params["productParams"] = [{"productId": int(query)}]
+    elif field == "text":
+        params["containsText"] = query   # nazwa + opis (marka, np. "Bobux")
     else:
         params["containsCodePart"] = query
+    if availability in ("y", "n"):
+        params["productIsAvailable"] = availability
     data = search_products(params)
     rows = [_product_row(p, with_tags=True) for p in data.get("results") or []]
     for row in rows:
@@ -246,25 +256,57 @@ def _find_deleted(query: str, limit: int) -> list[dict]:
             return matches
 
 
-def find_products(query: str, limit: int = 20) -> dict:
-    """Reczne wyszukanie po ID lub kodzie (czesci kodu) - bez filtra tagu
-    Archiwum; szuka najpierw w aktywnych, potem w usunietych (archiwum
-    IdoSell). Kazdy wiersz ma archived_tag oraz deleted."""
+def find_products(query: str, limit: int = 20, availability: str = None) -> dict:
+    """Reczne wyszukanie po ID, nazwie (marka/model) lub kodzie - bez filtra
+    tagu Archiwum; szuka w aktywnych, potem w usunietych (archiwum IdoSell).
+    Kazdy wiersz ma archived_tag oraz deleted. availability: 'y'/'n'/None."""
     query = (query or "").strip()
     if not query:
         return {"total": 0, "products": []}
 
-    # dla liczb najpierw ID, dopiero potem kod - inaczej containsCodePart
-    # "1" zalewa wynikami czastkowych trafien
     if query.isdigit():
-        rows = _find_active(query, by_id=True, limit=limit)
+        # liczba: najpierw ID, dopiero potem kod (containsCodePart "1"
+        # zalewa wynikami czastkowych trafien)
+        rows = _find_active(query, "id", limit, availability)
         if not rows:
-            rows = _find_active(query, by_id=False, limit=limit)
+            rows = _find_active(query, "code", limit, availability)
     else:
-        rows = _find_active(query, by_id=False, limit=limit)
-    if not rows:
+        # tekst: najpierw nazwa/opis (marka "Bobux"), potem fragment kodu
+        rows = _find_active(query, "text", limit, availability)
+        if not rows:
+            rows = _find_active(query, "code", limit, availability)
+    if not rows and availability is None:
         rows = _find_deleted(query, limit)
     return {"total": len(rows), "products": rows}
+
+
+def search_active(field: str, query: str, page: int = 0, limit: int = 20,
+                  availability: str = None) -> dict:
+    """Paginowane wyszukiwanie w aktywnych (bez tagu Archiwum) po nazwie/opisie
+    (field='text', np. marka 'Bobux') lub fragmencie kodu (field='code').
+    Zwraca pelny total z API (nie cap) - do przegladania calej marki."""
+    params = {
+        "returnProducts": "active",
+        "returnElements": SCAN_RETURN_ELEMENTS + ["parameters"],
+        "productParametersParams": [{
+            "productParameterIds": {
+                "productParameterIdsDisabled": [archive_tag_value_id()],
+            },
+        }],
+        "resultsPage": page,
+        "resultsLimit": limit,
+    }
+    if field == "text":
+        params["containsText"] = query
+    else:
+        params["containsCodePart"] = query
+    if availability in ("y", "n"):
+        params["productIsAvailable"] = availability
+    data = search_products(params)
+    rows = [_product_row(p, with_tags=True) for p in data.get("results") or []]
+    for row in rows:
+        row["deleted"] = False
+    return {"total": data.get("resultsNumberAll", 0), "products": rows}
 
 
 def get_product_images(product_id: int) -> list[dict]:
