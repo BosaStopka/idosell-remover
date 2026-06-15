@@ -1075,6 +1075,12 @@ async function openIdoPlan(productId) {
   }
   $("planBody").innerHTML = html;
   $("planSummary").textContent = `Po zmianie produkt będzie miał ${plan.final_count} zdjęć`;
+  if (!plan.backup_available) {
+    $("planBody").innerHTML += `<div class="allegro-note" style="border-color:var(--err);margin-top:12px">⛔ Dysk backupu (D:) niedostępny - zapis będzie zablokowany do czasu podłączenia. Oryginały muszą trafić do archiwum.</div>`;
+  } else {
+    $("planBody").innerHTML += `<p style="font-size:12.5px;margin-top:10px;color:${plan.originals_archived ? "var(--ok)" : "var(--muted)"}">
+      ${plan.originals_archived ? "🗄 Oryginały zarchiwizowane na D: (pełna rozdzielczość)" : "🗄 Oryginały zostaną zarchiwizowane na D: przed zapisem"}</p>`;
+  }
   if (plan.ready) {
     $("planGo").classList.remove("hidden");
   } else {
@@ -1151,7 +1157,8 @@ async function executeIdoPlan() {
       Weryfikacja GET-em: ${v.ok ? `✓ zgodna (${v.count} zdjęć, sloty 1..${v.expected})` : `⚠ NIEZGODNA - w sklepie ${v.count} zdjęć, oczekiwano ${v.expected} (sloty: ${(v.slots||[]).join(",")})`}
     </p>
     ${iconsLine}
-    <p style="font-size:12.5px;color:var(--muted);margin-top:8px">Backup: originals/idosell/${esc(planOfferId)}/ · dziennik: idosell_audit.jsonl</p>
+    <p style="font-size:12.5px;color:var(--ok);margin-top:8px">🗄 Oryginały w pełnej rozdzielczości: ${data.archive && data.archive.dir ? esc(data.archive.dir) : "D:\\idosell_backup"}${data.archive && data.archive.already ? " (już były)" : ""}</p>
+    <p style="font-size:12.5px;color:var(--muted);margin-top:4px">Backup stanu sprzed zapisu: originals/idosell/${esc(planOfferId)}/ · dziennik: idosell_audit.jsonl</p>
     <button class="btn btn-ghost" style="margin-top:14px" onclick="rollbackIdoPlan()">↩ Przywróć poprzednią galerię (rollback)</button>`;
   loadIdoProducts(true);
 }

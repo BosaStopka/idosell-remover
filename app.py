@@ -1209,6 +1209,9 @@ def idosell_product_process(product_id):
     """Wykonuje decyzje per zdjecie: 'process' -> kolejka obrobki,
     'keep'/'delete' -> tylko zapis w planie (done/{productId}/plan.json).
     NIC nie jest wysylane do IdoSell - zapis wykona faza 2 wg planu."""
+    # pierwsze dotkniecie produktu: trwale archiwum oryginalow na dysk D:
+    # (idempotentne - kolejne wejscia nic nie nadpisuja)
+    archive = archive_originals(product_id)
     options = parse_options(request.form)
     try:
         decisions = json.loads(request.form.get("decisions", "[]"))
@@ -1259,13 +1262,82 @@ def idosell_product_process(product_id):
     skipped = sum(1 for d in decisions if d.get("action") == "keep")
     to_delete = sum(1 for d in decisions if d.get("action") == "delete")
     return jsonify({"jobs": created, "errors": errors,
-                    "kept": skipped, "marked_delete": to_delete})
+                    "kept": skipped, "marked_delete": to_delete,
+                    "archive": archive})
 
 
 # ------------- IdoSell FAZA 2: wykonanie planu (zapis do sklepu) -------------
 
 IDO_AUDIT_FILE = BASE / "idosell_audit.jsonl"
 IDO_ORIGINALS_DIR = ORIGINALS_DIR / "idosell"
+
+
+def ido_backup_root():
+    """Katalog trwalego archiwum oryginalow (domyslnie D:\\idosell_backup).
+    Zwraca None gdy dysk niedostepny - zapis wtedy nie ruszy bez archiwum."""
+    cfg = idosell_client.load_config() or {}
+    root = Path(cfg.get("backup_dir") or "D:\\idosell_backup")
+    if root.drive and not Path(root.drive + "\\").exists():
+        return None
+    return root
+
+
+def archive_originals(product_id: int) -> dict:
+    """Trwale archiwum ORYGINALOW w pelnej rozdzielczosci (osobny dysk).
+    Idempotentne: pierwszy zrzut zostaje na zawsze (manifest _originals.json
+    = znacznik), kolejne wywolania niczego nie nadpisuja - to gwarantuje,
+    ze nie stracimy prawdziwego oryginalu nawet po wielu zapisach."""
+    root = ido_backup_root()
+    if root is None:
+        return {"ok": False, "reason": "Dysk backupu niedostepny (D:)"}
+    target = root / str(product_id)
+    manifest = target / "_originals.json"
+    if manifest.exists():
+        try:
+            info = json.loads(manifest.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            info = {}
+        return {"ok": True, "already": True, "dir": str(target),
+                "count": len(info.get("images", [])),
+                "captured_at": info.get("captured_at")}
+    try:
+        images = idosell_client.get_product_images(product_id)
+    except idosell_client.IdoSellError as e:
+        return {"ok": False, "reason": str(e)}
+    target.mkdir(parents=True, exist_ok=True)
+    img_entries = []
+    for img in images:
+        data = idosell_client.download_image(img["url"])
+        fname = img["id"] or f"{product_id}_{img['slot']}.jpg"
+        (target / fname).write_bytes(data)
+        img_entries.append({"id": img["id"], "slot": img["slot"],
+                            "url": img["url"], "hash": img["hash"],
+                            "width": img["width"], "height": img["height"],
+                            "bytes": len(data), "file": fname})
+    icon_entries = []
+    try:
+        for typ, info in idosell_client.get_product_icons(product_id).items():
+            if info["exists"] and info["url"]:
+                data = idosell_client.download_image(info["url"])
+                ext = ".webp" if ".webp" in info["url"] else ".jpg"
+                fname = f"icon_{typ}{ext}"
+                (target / fname).write_bytes(data)
+                icon_entries.append({"type": typ, "url": info["url"],
+                                     "file": fname, "bytes": len(data)})
+    except idosell_client.IdoSellError:
+        pass
+    manifest.write_text(json.dumps({
+        "product_id": product_id,
+        "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "note": "Pierwszy zrzut oryginalow - NIE nadpisywac.",
+        "images": img_entries,
+        "icons": icon_entries,
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
+    ido_audit("archive_originals", product_id, {
+        "images": len(img_entries), "icons": len(icon_entries),
+        "dir": str(target)})
+    return {"ok": True, "already": False, "dir": str(target),
+            "count": len(img_entries), "captured_at": None}
 
 
 def ido_audit(operation: str, product_id, details: dict):
@@ -1321,6 +1393,9 @@ def build_ido_plan_preview(product_id: int) -> dict:
                 ready = False
         items.append(item)
     final_count = sum(1 for d in plan["decisions"] if d["action"] != "delete")
+    backup_root = ido_backup_root()
+    archived = bool(backup_root and
+                    (backup_root / str(product_id) / "_originals.json").exists())
     return {
         "product_id": product_id,
         "items": items,
@@ -1329,6 +1404,8 @@ def build_ido_plan_preview(product_id: int) -> dict:
         "executed_at": plan.get("executed_at"),
         "verified": plan.get("verified"),
         "apply_macro": idosell_client.apply_macro_setting(),
+        "originals_archived": archived,
+        "backup_available": backup_root is not None,
     }
 
 
@@ -1411,6 +1488,13 @@ def idosell_product_execute(product_id):
         return jsonify({"error": "Nie wszystkie zdjecia z planu sa obrobione"}), 409
     if preview["final_count"] == 0:
         return jsonify({"error": "Plan usunalby wszystkie zdjecia produktu"}), 409
+
+    # OBOWIAZKOWE archiwum oryginalow na dysku D: zanim cokolwiek nadpiszemy
+    archive = archive_originals(product_id)
+    if not archive.get("ok"):
+        return jsonify({"error":
+            f"Brak archiwum oryginalow - zapis wstrzymany. {archive.get('reason', '')} "
+            f"(podlacz dysk backupu albo popraw backup_dir w configu)"}), 412
 
     plan = load_ido_plan(product_id)
     try:
@@ -1507,6 +1591,7 @@ def idosell_product_execute(product_id):
     return jsonify({"ok": True, "uploaded": uploaded,
                     "final_count": final_count, "verify": verify,
                     "icons_set": sorted(icons_b64),
+                    "archive": archive,
                     "executed_at": plan["executed_at"]})
 
 
