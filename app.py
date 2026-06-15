@@ -361,11 +361,35 @@ def api_retry(job_id):
             return jsonify({"error": "Brak oryginalu - dodaj zdjecie ponownie"}), 404
         if job["status"] in ("queued", "processing"):
             return jsonify({"error": "Zadanie juz jest w kolejce"}), 409
+        # zachowaj mirror (per-zdjecie, brak go w formularzu globalnym)
+        if "mirror" not in options:
+            options["mirror"] = bool((job.get("options") or {}).get("mirror"))
         job.update(status="queued", error=None, result=None,
                    seconds=None, options=options, data=None)
     queue.put(job_id)
     persist_jobs()
     return jsonify({"job": job_id})
+
+
+@app.post("/api/jobs/stop")
+def api_jobs_stop():
+    """Anuluje wszystkie zadania w kolejce (biezace dokonczy sie samo)."""
+    while True:
+        try:
+            queue.get_nowait()
+        except Exception:
+            break
+    canceled = 0
+    with lock:
+        for jid in job_order:
+            j = jobs[jid]
+            if j["status"] == "queued":
+                j["status"] = "error"
+                j["error"] = "Anulowane - mozna ponowic"
+                j["data"] = None
+                canceled += 1
+    persist_jobs()
+    return jsonify({"canceled": canceled})
 
 
 @app.get("/done/<path:relpath>")
@@ -441,6 +465,116 @@ def api_recompose(job_id):
         return jsonify({"ok": True, "result": job["result"], "qa": qa})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ---------------- wyrownanie barw galerii (rozne sesje zdjeciowe) ----------------
+
+COLOR_CAP_CHROMA = 10   # maks. przesuniecie Cb/Cr
+COLOR_CAP_LUMA = 8      # maks. przesuniecie Y (jasnosc)
+COLOR_OUTLIER_DIST = 12.0  # tylko wyrazne odstepstwo tonacji (sesja),
+#                            nie naturalna zmiennosc ujec
+
+
+def _group_color_stats(pid: str) -> list:
+    """Srednie YCbCr pikseli produktu dla kazdego edytowalnego zadania grupy."""
+    import numpy as np
+    from PIL import Image
+    with lock:
+        group = [dict(jobs[j]) for j in job_order
+                 if jobs[j]["status"] == "done"
+                 and extract_product_id(Path(jobs[j]["name"]).stem) == pid]
+    stats = []
+    for j in group:
+        rgb_p = MASKS_DIR / f"{j['id']}.rgb.jpg"
+        a_p = MASKS_DIR / f"{j['id']}.a.png"
+        if not rgb_p.exists() or not a_p.exists() or not j.get("editable", True):
+            continue
+        ycc = np.asarray(Image.open(rgb_p).convert("YCbCr"), dtype=np.float64)
+        mask = np.asarray(Image.open(a_p).convert("L")) > 128
+        if mask.sum() < 500:
+            continue
+        # tint mierzymy z kolorowych pikseli materialu (chroma > 8) - biale
+        # wkladki/podeszwa rozcienczalyby pomiar i falszowaly odchylke
+        prod = ycc[mask]
+        chroma = np.sqrt((prod[:, 1] - 128) ** 2 + (prod[:, 2] - 128) ** 2)
+        colored = prod[chroma > 8]
+        means = (colored if len(colored) > 200 else prod).mean(axis=0)
+        stats.append({"id": j["id"], "name": j["name"],
+                      "y": round(float(means[0]), 1),
+                      "cb": round(float(means[1]), 1),
+                      "cr": round(float(means[2]), 1)})
+    return stats
+
+
+def _color_analysis(pid: str) -> dict:
+    import numpy as np
+    stats = _group_color_stats(pid)
+    if len(stats) < 3:
+        return {"error": "Za malo zdjec z danymi (min 3 obrobione)"}
+    med = {k: float(np.median([s[k] for s in stats])) for k in ("y", "cb", "cr")}
+    for s in stats:
+        s["dist"] = round(((s["cb"] - med["cb"]) ** 2 +
+                           (s["cr"] - med["cr"]) ** 2) ** 0.5, 1)
+        s["outlier"] = s["dist"] > COLOR_OUTLIER_DIST
+    return {"median": med, "photos": stats,
+            "outliers": sum(1 for s in stats if s["outlier"])}
+
+
+@app.get("/api/groups/<pid>/colors")
+def api_group_colors(pid):
+    result = _color_analysis(pid)
+    return (jsonify(result), 400) if "error" in result else jsonify(result)
+
+
+@app.post("/api/groups/<pid>/colors/apply")
+def api_group_colors_apply(pid):
+    """Koryguje odstajace zdjecia do mediany grupy (z limitem sily),
+    zapisuje poprawione rgb robocze i rekomponuje wyniki."""
+    import numpy as np
+    from PIL import Image
+    result = _color_analysis(pid)
+    if "error" in result:
+        return jsonify(result), 400
+    med = result["median"]
+    adjusted = []
+    for s in result["photos"]:
+        if not s["outlier"]:
+            continue
+        delta = {
+            "y": max(-COLOR_CAP_LUMA, min(COLOR_CAP_LUMA, med["y"] - s["y"])),
+            "cb": max(-COLOR_CAP_CHROMA, min(COLOR_CAP_CHROMA, med["cb"] - s["cb"])),
+            "cr": max(-COLOR_CAP_CHROMA, min(COLOR_CAP_CHROMA, med["cr"] - s["cr"])),
+        }
+        rgb_p = MASKS_DIR / f"{s['id']}.rgb.jpg"
+        a_p = MASKS_DIR / f"{s['id']}.a.png"
+        ycc = np.asarray(Image.open(rgb_p).convert("YCbCr"), dtype=np.float64)
+        # Waga korekty per piksel = jego nasycenie. Biel/szarosc (wkladki,
+        # podeszwa) maja chroma ~0 -> waga ~0 -> nie zmieniaja koloru.
+        # Kolorowy material korygowany w pelni - usuwa tint sesji bez
+        # przebarwiania neutralnych obszarow.
+        chroma = np.sqrt((ycc[..., 1] - 128) ** 2 + (ycc[..., 2] - 128) ** 2)
+        w = np.clip((chroma - 8) / (28 - 8), 0, 1)
+        ycc[..., 0] += delta["y"] * w
+        ycc[..., 1] += delta["cb"] * w
+        ycc[..., 2] += delta["cr"] * w
+        fixed = Image.fromarray(
+            np.clip(ycc, 0, 255).astype("uint8"), "YCbCr").convert("RGB")
+        fixed.save(rgb_p, "JPEG", quality=90)
+
+        with lock:
+            job = jobs.get(s["id"])
+            options = dict(job.get("options") or {}) if job else {}
+        alpha = Image.open(a_p).convert("L")
+        img = pipeline.compose_from(fixed, alpha, options)
+        stem = Path(s["name"]).stem
+        out_path = DONE_DIR / extract_product_id(stem) / (stem + ".jpg")
+        img.save(out_path, "JPEG", quality=95)
+        with lock:
+            if job:
+                job["seconds"] = (job.get("seconds") or 0) + 0.1
+        adjusted.append({"id": s["id"], "name": s["name"], "delta": delta})
+    persist_jobs()
+    return jsonify({"adjusted": adjusted, "count": len(adjusted)})
 
 
 @app.get("/api/zip")

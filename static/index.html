@@ -479,6 +479,7 @@
       <div class="toolbar">
         <button class="btn btn-ghost" id="zipBtn">⬇ Pobierz wszystko (ZIP)</button>
         <button class="btn btn-ghost" id="clearBtn">🧹 Wyczyść zakończone</button>
+        <button class="btn btn-ghost hidden" id="stopBtn" style="color:var(--err);border-color:var(--err)">⏹ Stop kolejki</button>
         <button class="btn btn-primary" id="bulkPushBtn" style="margin-left:auto">📤 Wyślij gotowe do IdoSell</button>
         <label class="qa-filter"><input type="checkbox" id="qaOnly"> ⚠ Tylko z uwagami QA</label>
       </div>
@@ -714,6 +715,35 @@ goBtn.addEventListener("click", async () => {
   render();
 });
 $("qaOnly").addEventListener("change", e => { qaOnly = e.target.checked; render(); });
+$("stopBtn").addEventListener("click", async () => {
+  const res = await api("/api/jobs/stop", { method: "POST" });
+  const data = await res.json();
+  if (data.canceled) refresh();
+});
+
+async function levelColors(pid, btn) {
+  btn.disabled = true; btn.textContent = "Analiza...";
+  let data;
+  try {
+    const res = await api(`/api/groups/${encodeURIComponent(pid)}/colors`);
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  btn.disabled = false; btn.textContent = "🎨 Wyrównaj barwy";
+  if (data.error) { alert(data.error); return; }
+  if (!data.outliers) { alert("Wszystkie zdjęcia mają spójną tonację - nic do poprawy."); return; }
+  const lines = data.photos.map(p =>
+    `${p.outlier ? "➤" : "  "} ${p.name}  (odchyłka ${p.dist})${p.outlier ? "  <- DO KOREKTY" : ""}`);
+  if (!confirm(`Analiza tonacji grupy ${pid}:\n\n${lines.join("\n")}\n\nSkorygować ${data.outliers} odstających zdjęć do tonacji większości?\n\nUwaga: zdjęcie INNEGO elementu (np. samych wkładek czy podeszwy) może odstawać naturalnie - jeśli takie jest na liście, rozważ anulowanie. Korekta ma limit siły, cofnięcie: ↻ Ponów na zdjęciu.`)) return;
+  btn.disabled = true; btn.textContent = "Korekta...";
+  try {
+    const res = await api(`/api/groups/${encodeURIComponent(pid)}/colors/apply`, { method: "POST" });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  btn.disabled = false; btn.textContent = "🎨 Wyrównaj barwy";
+  if (data.error) { alert(data.error); return; }
+  lastJobsKey = "";
+  refresh();
+}
 
 // ---------- push wsadowy do IdoSell ----------
 function readyIdoGroups() {
@@ -808,6 +838,7 @@ async function refresh() {
     render();
   }
   const active = fresh.some(j => j.status === "queued" || j.status === "processing");
+  $("stopBtn").classList.toggle("hidden", !active);
   const activeAllegro = fresh.some(j => j.source === "allegro" &&
     (j.status === "queued" || j.status === "processing"));
   const activeIdo = fresh.some(j => j.source === "idosell" &&
@@ -882,7 +913,10 @@ function render() {
                 : (allDone && doneCount ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">✓ QA OK</span>` : "")}
       ${isAllegro ? `<span class="badge allegro">Allegro</span>` : ""}
       ${isIdo ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">IdoSell</span>` : ""}
-      ${isIdo ? `<button class="btn btn-ghost" style="margin-left:auto;padding:6px 12px;font-size:12px" ${allDone ? "" : "disabled title='Najpierw dokończ obróbkę'"} onclick="openIdoPlan('${esc(pid)}')">📤 Wyślij do IdoSell</button>` : ""}
+      <span style="margin-left:auto;display:flex;gap:8px">
+        ${doneCount >= 3 ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="levelColors('${esc(pid)}', this)" title="Wykryj zdjęcia z innej sesji (inna tonacja) i dopasuj do większości">🎨 Wyrównaj barwy</button>` : ""}
+        ${isIdo ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" ${allDone ? "" : "disabled title='Najpierw dokończ obróbkę'"} onclick="openIdoPlan('${esc(pid)}')">📤 Wyślij do IdoSell</button>` : ""}
+      </span>
     </div>`;
     if (collapsed) continue;
     for (const j of gjobs) {
