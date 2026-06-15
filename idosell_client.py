@@ -376,12 +376,30 @@ def apply_macro_setting() -> bool:
     return bool(cfg.get("apply_macro", False))
 
 
-def put_product_images(product_id: int, images_b64: list[str],
-                       shop_id: int = 1) -> dict:
+def _shop_id():
+    """Sklep docelowy zapisu zdjec. Domyslnie None = poziom GLOBALNY
+    ("wszystkie sklepy"). Podanie shopId tworzy ODDZIELNY zestaw zdjec
+    per sklep (osobna zakladka w panelu) - to nie jest to, czego chcemy
+    (4576, 2026-06-15). Mozna wymusic przez "shop_id" w configu, gdyby
+    API tego wymagalo."""
+    cfg = load_config() or {}
+    return cfg.get("shop_id")  # None => pomijamy pole shopId
+
+
+def _with_shop(entry: dict) -> dict:
+    """Dodaje shopId do wpisu productsImages tylko gdy skonfigurowany."""
+    sid = _shop_id()
+    if sid is not None:
+        entry["shopId"] = sid
+    return entry
+
+
+def put_product_images(product_id: int, images_b64: list[str]) -> dict:
     """Wgrywa galerie per slot: zdjecie i-te -> productImageNumber i.
     Nadpisuje istniejace sloty, nie kasuje slotow powyzej len(images_b64)
-    (to robi delete_product_images). Rzuca IdoSellError przy bledzie
-    ktoregokolwiek zdjecia (207).
+    (to robi delete_product_images). Zapis na poziom globalny (wszystkie
+    sklepy) - patrz _shop_id. Rzuca IdoSellError przy bledzie ktoregokolwiek
+    zdjecia (207).
 
     UWAGA: ikon NIE wysylac w tym samym wywolaniu co galerie - IdoSell
     deduplikuje ikone identyczna ze zdjeciem galerii do REFERENCJI na
@@ -395,17 +413,16 @@ def put_product_images(product_id: int, images_b64: list[str],
             "productsImagesSourceType": "base64",
             "productsImagesApplyMacro": apply_macro_setting(),
         },
-        "productsImages": [{
+        "productsImages": [_with_shop({
             "productIdent": {"productIdentType": "id",
                              "identValue": str(product_id)},
-            "shopId": shop_id,
             "productImages": [{
                 "productImageSource": b64,
                 "productImageNumber": i,
                 "productImagePriority": i,
                 "deleteProductImage": False,
             } for i, b64 in enumerate(images_b64, 1)],
-        }],
+        })],
     }
     data = _request("PUT", "/products/images", params, timeout=300)
     faults = _collect_faults(data, f"produkt {product_id}")
@@ -414,8 +431,7 @@ def put_product_images(product_id: int, images_b64: list[str],
     return data
 
 
-def set_product_icons(product_id: int, icons_b64: dict,
-                      shop_id: int = 1) -> dict:
+def set_product_icons(product_id: int, icons_b64: dict) -> dict:
     """Ustawia ikony produktu (osobnym PUT-em, po zapisie galerii).
     icons_b64: {typ z ICON_TYPES: base64}."""
     entries = [{
@@ -430,12 +446,11 @@ def set_product_icons(product_id: int, icons_b64: dict,
             "productsImagesSourceType": "base64",
             "productsImagesApplyMacro": apply_macro_setting(),
         },
-        "productsImages": [{
+        "productsImages": [_with_shop({
             "productIdent": {"productIdentType": "id",
                              "identValue": str(product_id)},
-            "shopId": shop_id,
             "productIcons": entries,
-        }],
+        })],
     }
     data = _request("PUT", "/products/images", params, timeout=120)
     faults = _collect_faults(data, f"produkt {product_id}")
@@ -444,8 +459,7 @@ def set_product_icons(product_id: int, icons_b64: dict,
     return data
 
 
-def delete_product_icon(product_id: int, icon_type: str,
-                        shop_id: int = 1) -> dict:
+def delete_product_icon(product_id: int, icon_type: str) -> dict:
     """Usuwa jedna z 3 ikon produktu (rollback ikony, ktorej nie bylo)."""
     if icon_type not in ICON_TYPES:
         raise IdoSellError(f"Nieznany typ ikony: {icon_type}")
@@ -454,15 +468,14 @@ def delete_product_icon(product_id: int, icon_type: str,
             "productsImagesSourceType": "base64",
             "productsImagesApplyMacro": apply_macro_setting(),
         },
-        "productsImages": [{
+        "productsImages": [_with_shop({
             "productIdent": {"productIdentType": "id",
                              "identValue": str(product_id)},
-            "shopId": shop_id,
             "productIcons": [{
                 "productIconType": icon_type,
                 "deleteProductIcon": True,
             }],
-        }],
+        })],
     }
     data = _request("PUT", "/products/images", params, timeout=60)
     faults = _collect_faults(data, f"produkt {product_id}")
@@ -471,17 +484,20 @@ def delete_product_icon(product_id: int, icon_type: str,
     return data
 
 
-def delete_product_images(product_id: int, image_ids: list[str],
-                          shop_id: int = 1) -> dict:
-    """Kasuje wskazane zdjecia (productImageId z searcha, np. '334_5.jpg')."""
+def delete_product_images(product_id: int, image_ids: list[str]) -> dict:
+    """Kasuje wskazane zdjecia (productImageId z searcha, np. '334_5.jpg').
+    Bez shopId = poziom globalny (chyba ze skonfigurowany shop_id)."""
     if not image_ids:
         return {}
-    data = _post("/products/images/delete", [{
+    entry = {
         "productId": int(product_id),
-        "shopId": shop_id,
         "productImagesId": list(image_ids),
         "deleteAll": False,
-    }])
+    }
+    sid = _shop_id()
+    if sid is not None:
+        entry["shopId"] = sid
+    data = _post("/products/images/delete", [entry])
     faults = _collect_faults(data, f"produkt {product_id}")
     if faults:
         raise IdoSellError("Kasowanie zdjec: " + "; ".join(faults)[:500])

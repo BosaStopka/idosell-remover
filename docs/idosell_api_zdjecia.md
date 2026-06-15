@@ -89,6 +89,13 @@ Odpowiedź - per produkt tablica `productImages`:
 ```
 
 Uwagi:
+- **shopId - POZIOM GLOBALNY vs PER SKLEP** (ZWERYFIKOWANE 2026-06-15):
+  podanie `shopId` (np. 1) tworzy ODDZIELNY zestaw zdjęć dla tego sklepu
+  - w panelu pojawia się osobna zakładka ("bosastopka.pl") obok "Zdjęcia
+  we wszystkich sklepach", a stary globalny zestaw zostaje obok. Normalne
+  produkty mają jeden globalny zestaw (bez zakładek). Aby pisać globalnie:
+  POMIJAĆ `shopId` (i `otherShopsForPic`). Klient: domyślnie omija shopId,
+  opcjonalny `shop_id` w idosell_config.json wymusza per-sklep.
 - Edycja per slot (`productImageNumber`) - NIE podmienia całej galerii naraz;
   usuwanie konkretnego slotu przez `deleteProductImage: true`.
 - `productsImagesApplyMacro` - czy IdoSell ma przetwarzać zdjęcia swoim makrem;
