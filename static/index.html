@@ -233,6 +233,7 @@
     border-radius: 6px; padding: 2px 9px; cursor: pointer; font-size: 11px;
   }
   .order-row button:disabled { opacity: .3; cursor: default; }
+  .order-row button.mir-on { background: rgba(0,206,201,.22); color: var(--accent2); border-color: var(--accent2); }
   .modal-foot { display: flex; gap: 10px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
   .modal-foot .summary { margin-right: auto; font-size: 13px; color: var(--muted); }
 
@@ -348,20 +349,20 @@
         <details>
           <summary>Ustawienia zaawansowane</summary>
           <div class="opt-row slider-row">
-            <label>Moc cienia <span class="range-val" id="valShadowOp">0.20</span></label>
-            <span class="range-wrap"><input type="range" id="optShadowOp" min="0.05" max="0.5" step="0.05" value="0.20"></span>
+            <label>Moc cienia <span class="range-val" id="valShadowOp">0.18</span></label>
+            <span class="range-wrap"><input type="range" id="optShadowOp" min="0.05" max="0.5" step="0.01" value="0.18"></span>
           </div>
           <div class="opt-row slider-row">
-            <label>Rozmycie cienia <span class="range-val" id="valShadowBlur">8</span></label>
-            <span class="range-wrap"><input type="range" id="optShadowBlur" min="4" max="24" step="1" value="8"></span>
+            <label>Rozmycie cienia <span class="range-val" id="valShadowBlur">11</span></label>
+            <span class="range-wrap"><input type="range" id="optShadowBlur" min="4" max="24" step="1" value="11"></span>
           </div>
           <div class="opt-row slider-row">
-            <label>Saturacja <span class="range-val" id="valSat">1.04</span></label>
-            <span class="range-wrap"><input type="range" id="optSat" min="1.0" max="1.3" step="0.01" value="1.04"></span>
+            <label>Saturacja <span class="range-val" id="valSat">1.02</span></label>
+            <span class="range-wrap"><input type="range" id="optSat" min="1.0" max="1.3" step="0.01" value="1.02"></span>
           </div>
           <div class="opt-row slider-row">
-            <label>Kontrast <span class="range-val" id="valCon">1.02</span></label>
-            <span class="range-wrap"><input type="range" id="optCon" min="1.0" max="1.2" step="0.01" value="1.02"></span>
+            <label>Kontrast <span class="range-val" id="valCon">1.00</span></label>
+            <span class="range-wrap"><input type="range" id="optCon" min="1.0" max="1.2" step="0.01" value="1.00"></span>
           </div>
           <div class="opt-row slider-row">
             <label>Wypełnienie kadru <span class="range-val" id="valPad">90%</span></label>
@@ -511,8 +512,8 @@ bind("optUp", "valUp", x => x + "x");
 
 const OPT_DEFAULTS = {
   optSize: "1600", optShadow: true, optColors: true, optSharpen: true,
-  optShadowOp: "0.20", optShadowBlur: "8", optSat: "1.04",
-  optCon: "1.02", optPad: "0.90", optUp: "3",
+  optShadowOp: "0.18", optShadowBlur: "11", optSat: "1.02",
+  optCon: "1.00", optPad: "0.90", optUp: "3",
 };
 $("resetBtn").addEventListener("click", () => {
   for (const [id, val] of Object.entries(OPT_DEFAULTS)) {
@@ -888,6 +889,7 @@ function renderPick() {
         <button onclick="movePick(${i},-1)" ${i === 0 ? "disabled" : ""} title="W lewo">◀</button>
         <button onclick="makeMain(${i})" ${i === 0 ? "disabled" : ""} title="Ustaw jako miniaturkę">★</button>
         <span>${i + 1}</span>
+        ${pickState.source === "idosell" ? `<button onclick="toggleMirror(${i})" class="${it.mirror ? "mir-on" : ""}" title="Odbij lustrzanie (standaryzacja noska)">⇄</button>` : ""}
         <button onclick="movePick(${i},1)" ${i === pickState.items.length - 1 ? "disabled" : ""} title="W prawo">▶</button>
       </div>
       <div class="seg">
@@ -911,8 +913,10 @@ function renderPick() {
     });
     iconInfo = ` · ${parts.join(" ")}`;
   }
+  const mirN = pickState.items.filter(x => x.mirror).length;
+  const mirInfo = mirN ? ` · ⇄ odbite: ${mirN}` : "";
   $("pickSummary").textContent =
-    `Obróbka: ${c("process")} · Zostaw: ${c("keep")} · Do usunięcia: ${c("delete")}${iconInfo} · kolejność = galeria`;
+    `Obróbka: ${c("process")} · Zostaw: ${c("keep")} · Do usunięcia: ${c("delete")}${iconInfo}${mirInfo} · kolejność = galeria`;
   $("pickGo").disabled = !pickState.items.length;
 }
 function setPick(i, action) {
@@ -940,6 +944,7 @@ function makeMain(i) {
   pickState.items.unshift(it);
   renderPick();
 }
+function toggleMirror(i) { pickState.items[i].mirror = !pickState.items[i].mirror; renderPick(); }
 
 $("pickCancel").addEventListener("click", () => {
   if (batchQueue.length &&
@@ -1407,6 +1412,7 @@ async function processIdoProduct(id, btn) {
       index: i + 1,
       // domyslnie zdjecie nr 1 -> Lista + Grupa
       icons: i === 0 ? ["shop", "group"] : [],
+      mirror: false,
     })),
     btn,
   };

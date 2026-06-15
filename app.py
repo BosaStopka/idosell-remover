@@ -1239,6 +1239,7 @@ def idosell_product_process(product_id):
                        "slot": d.get("slot"),
                        "url": d["url"],
                        "action": d["action"],
+                       "mirror": bool(d.get("mirror")),
                        "icons": [t for t in (d.get("icons") or [])
                                  if t in idosell_client.SETTABLE_ICON_TYPES]}
                       for i, d in enumerate(decisions)],
@@ -1257,8 +1258,10 @@ def idosell_product_process(product_id):
         except idosell_client.IdoSellError as e:
             errors.append(f"zdjecie {idx}: {e}")
             continue
+        # mirror per zdjecie (standaryzacja kierunku noska)
+        job_opts = {**options, "mirror": bool(d.get("mirror"))}
         created.append(submit_job(
-            f"{product_id}_{idx}.jpg", data, options, source="idosell"))
+            f"{product_id}_{idx}.jpg", data, job_opts, source="idosell"))
     skipped = sum(1 for d in decisions if d.get("action") == "keep")
     to_delete = sum(1 for d in decisions if d.get("action") == "delete")
     return jsonify({"jobs": created, "errors": errors,
