@@ -20,6 +20,12 @@ DEFAULTS = {
     "contrast": 1.02,
     "sharpen": True,         # unsharp po upscale > 1.2x
     "edge_feather": 1.0,     # wtopienie krawedzi maski w px
+    # podbicie kontrastu/jasnosci TYLKO do policzenia maski - model lepiej
+    # lapie niskokontrastowe fragmenty (szary element na jasnym tle);
+    # finalny obraz skladany z ORYGINALNYCH pikseli, kolory bez zmian.
+    # 1.0/1.0 = wylaczone. Zweryfikowane na 4576_1 (odzyskany jezyk pisty).
+    "mask_contrast": 1.8,
+    "mask_brightness": 0.8,
 }
 
 
@@ -124,6 +130,15 @@ def process_bytes(data: bytes, opt: dict) -> Image.Image:
         src = src.resize(
             (int(src.size[0] * ratio), int(src.size[1] * ratio)), Image.LANCZOS)
 
+    # obraz do SEGMENTACJI: podbity kontrast/jasnosc (lepsza maska na
+    # niskokontrastowych fragmentach); finalny obraz - oryginalne piksele
+    mc, mb = float(options["mask_contrast"]), float(options["mask_brightness"])
+    seg_src = src
+    if mc != 1.0:
+        seg_src = ImageEnhance.Contrast(seg_src).enhance(mc)
+    if mb != 1.0:
+        seg_src = ImageEnhance.Brightness(seg_src).enhance(mb)
+
     # "bad allocation" przy malej ilosci wolnego RAM bywa przejsciowe -
     # gc + pauza i ponowna proba; odstepy rosnace (5s, 15s)
     last_err = None
@@ -132,7 +147,7 @@ def process_bytes(data: bytes, opt: dict) -> Image.Image:
             gc.collect()
             time.sleep(delay)
         try:
-            rgba = remove(src, session=get_session()).convert("RGBA")
+            seg = remove(seg_src, session=get_session()).convert("RGBA")
             break
         except Exception as e:
             last_err = e
@@ -143,5 +158,8 @@ def process_bytes(data: bytes, opt: dict) -> Image.Image:
             f"Za malo wolnego RAM (3 proby): {last_err}. "
             "Zamknij inne programy i sprobuj ponownie.")
 
+    # alfa z podbitego obrazu, piksele z oryginalu
+    rgba = src.convert("RGBA")
+    rgba.putalpha(seg.split()[3])
     rgba = refine_edges(rgba, float(options["edge_feather"]))
     return compose(rgba, options)
