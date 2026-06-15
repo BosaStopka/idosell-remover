@@ -36,6 +36,8 @@ DONE_DIR = BASE / "done"
 DONE_DIR.mkdir(exist_ok=True)
 ORIGINALS_DIR = BASE / "originals"
 ORIGINALS_DIR.mkdir(exist_ok=True)
+MASKS_DIR = BASE / "masks"
+MASKS_DIR.mkdir(exist_ok=True)
 APP_CONFIG_FILE = BASE / "app_config.json"
 JOBS_STATE_FILE = BASE / "jobs_state.json"
 
@@ -113,7 +115,7 @@ def extract_product_id(stem: str) -> str:
 
 
 PERSIST_KEYS = ("id", "name", "status", "result", "error", "source",
-                "orig", "options", "seconds")
+                "orig", "options", "seconds", "editable")
 
 
 def persist_jobs():
@@ -164,17 +166,25 @@ def worker():
                 raise RuntimeError("Brak danych wejsciowych zadania")
             t0 = time.time()
             inference_busy.set()  # wstrzymaj skan na czas inferencji (RAM)
-            img = pipeline.process_bytes(data, job["options"])
+            img, work_rgb, work_alpha, full_bleed = pipeline.process_bytes(
+                data, job["options"], with_parts=True)
             stem = Path(job["name"]).stem
             pid = extract_product_id(stem)
             out_dir = DONE_DIR / pid
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / (stem + ".jpg")
             img.save(out_path, "JPEG", quality=95)
+            # czesci robocze dla edytora maski: prawdziwy oryginal (rgb) + maska
+            try:
+                work_rgb.save(MASKS_DIR / f"{job_id}.rgb.jpg", "JPEG", quality=90)
+                work_alpha.save(MASKS_DIR / f"{job_id}.a.png")
+            except OSError:
+                pass
             with lock:
                 job["status"] = "done"
                 job["result"] = f"{pid}/{stem}.jpg"
                 job["seconds"] = round(time.time() - t0, 1)
+                job["editable"] = True
                 job["data"] = None
         except Exception as e:
             with lock:
@@ -259,7 +269,7 @@ def api_jobs():
             j = jobs[jid]
             out.append({k: j.get(k) for k in
                         ("id", "name", "status", "result", "error",
-                         "source", "orig", "seconds")})
+                         "source", "orig", "seconds", "editable")})
     return jsonify(out)
 
 
@@ -273,6 +283,11 @@ def api_clear():
             if orig:
                 try:
                     (ORIGINALS_DIR / orig).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            for suffix in (".rgb.jpg", ".a.png"):
+                try:
+                    (MASKS_DIR / f"{jid}{suffix}").unlink(missing_ok=True)
                 except OSError:
                     pass
             job_order.remove(jid)
@@ -308,6 +323,69 @@ def api_retry(job_id):
 @app.get("/done/<path:relpath>")
 def serve_done(relpath):
     return send_from_directory(DONE_DIR, relpath)
+
+
+@app.get("/masks/<path:relpath>")
+def serve_mask(relpath):
+    return send_from_directory(MASKS_DIR, relpath)
+
+
+@app.get("/api/jobs/<job_id>/editor")
+def api_editor(job_id):
+    """Dane do edytora maski: rgb robocze + aktualna alpha."""
+    with lock:
+        job = jobs.get(job_id)
+    rgb = MASKS_DIR / f"{job_id}.rgb.jpg"
+    alpha = MASKS_DIR / f"{job_id}.a.png"
+    if not job or not rgb.exists() or not alpha.exists():
+        return jsonify({"error": "Brak danych edytora - obrob zdjecie "
+                                 "ponownie (starsze zadania ich nie maja)"}), 404
+    return jsonify({
+        "rgb": f"/masks/{job_id}.rgb.jpg?t={int(rgb.stat().st_mtime)}",
+        "alpha": f"/masks/{job_id}.a.png?t={int(alpha.stat().st_mtime)}",
+        "editable": True,
+        "name": job["name"],
+    })
+
+
+@app.post("/api/jobs/<job_id>/recompose")
+def api_recompose(job_id):
+    """Rekompozycja z poprawiona reczne maska - bez inferencji (szybkie)."""
+    from io import BytesIO
+
+    from PIL import Image
+    with lock:
+        job = jobs.get(job_id)
+    rgb_path = MASKS_DIR / f"{job_id}.rgb.jpg"
+    if not job or not rgb_path.exists():
+        return jsonify({"error": "Brak danych edytora"}), 404
+    mask_file = request.files.get("mask")
+    if not mask_file:
+        return jsonify({"error": "Brak maski"}), 400
+    options = parse_options(request.form)
+    try:
+        rgb = Image.open(rgb_path)
+        # edytor koduje maske w kanale ALFA (gumka zeruje alfe, nie RGB) -
+        # czytamy alfe, nie luminancje RGB, inaczej 'Wymaz' nie dziala
+        m = Image.open(BytesIO(mask_file.read())).convert("RGBA")
+        alpha = m.split()[3]
+        if alpha.getextrema() == (255, 255):   # brak alfy (np. JPG) -> luminancja
+            alpha = m.convert("L")
+        if alpha.size != rgb.size:
+            alpha = alpha.resize(rgb.size, Image.LANCZOS)
+        t0 = time.time()
+        img = pipeline.compose_from(rgb, alpha, options)
+        stem = Path(job["name"]).stem
+        out_path = DONE_DIR / extract_product_id(stem) / (stem + ".jpg")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out_path, "JPEG", quality=95)
+        alpha.save(MASKS_DIR / f"{job_id}.a.png")  # utrwal poprawiona maske
+        with lock:
+            job["seconds"] = round(time.time() - t0, 1)
+        persist_jobs()
+        return jsonify({"ok": True, "result": job["result"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.get("/api/zip")

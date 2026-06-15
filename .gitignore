@@ -16,6 +16,7 @@ allegro_audit.jsonl
 done/
 input/
 originals/
+masks/
 __pycache__/
 *.pyc
 

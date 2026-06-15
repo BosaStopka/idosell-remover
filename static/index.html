@@ -253,9 +253,68 @@
     padding: 2px 8px; border-radius: 12px; background: rgba(0,0,0,.6);
     color: var(--accent2); pointer-events: none;
   }
+  .edit-btn {
+    position: absolute; bottom: 8px; right: 8px; width: 28px; height: 28px;
+    border-radius: 50%; border: none; background: rgba(0,0,0,.55);
+    color: #fff; cursor: pointer; font-size: 13px; display: grid; place-items: center;
+  }
+  .edit-btn:hover { background: var(--accent); }
+  .ed-tools {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 10px 0 14px;
+  }
+  .ed-group { display: flex; align-items: center; gap: 8px; }
+  .ed-group .btn.on { border-color: var(--accent2); color: var(--accent2); }
+  .ed-stage {
+    position: relative; user-select: none; touch-action: none;
+    background: repeating-conic-gradient(#20242f 0% 25%, #181b25 0% 50%) 0 0/24px 24px;
+    border-radius: 12px; overflow: hidden; max-height: 68vh;
+    display: flex; justify-content: center;
+  }
+  .ed-stage img, .ed-stage canvas {
+    display: block; max-width: 100%; max-height: 68vh; object-fit: contain;
+  }
+  #edResult {
+    position: absolute; inset: 0; margin: auto; cursor: crosshair;
+  }
+  #edSplitLine {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: var(--accent2); pointer-events: none; display: none;
+  }
 </style>
 </head>
 <body>
+
+<div class="overlay hidden" id="editorOverlay">
+  <div class="panel modal-box" style="max-width:1100px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <h2 id="edTitle" style="margin:0">Edytor maski</h2>
+      <span id="edStatus" style="font-size:12.5px;color:var(--muted)"></span>
+      <button class="btn btn-ghost" id="edClose" style="margin-left:auto">✕ Zamknij</button>
+    </div>
+    <div class="ed-tools">
+      <div class="ed-group" id="edBrushTools">
+        <button class="btn btn-ghost on" id="edRestore" title="Domaluj brakujący fragment produktu">🖌 Przywróć</button>
+        <button class="btn btn-ghost" id="edErase" title="Wymaż tło błędnie uznane za produkt">🧽 Wymaż</button>
+        <label style="font-size:12px;color:var(--muted)">Rozmiar
+          <input type="range" id="edBrushSize" min="6" max="120" value="36" style="width:110px;vertical-align:middle">
+        </label>
+        <button class="btn btn-ghost" id="edUndo" title="Cofnij pociągnięcie">↶ Cofnij</button>
+      </div>
+      <div class="ed-group" style="flex:1;min-width:220px">
+        <span style="font-size:11px;color:var(--muted)">PRZED</span>
+        <input type="range" id="edSplit" min="0" max="100" value="100" style="flex:1">
+        <span style="font-size:11px;color:var(--accent2)">PO</span>
+      </div>
+      <button class="btn btn-primary" id="edApply">💾 Zastosuj i przelicz</button>
+    </div>
+    <div class="ed-stage" id="edStage">
+      <img id="edBefore" draggable="false">
+      <canvas id="edResult"></canvas>
+      <div id="edSplitLine"></div>
+    </div>
+  </div>
+</div>
 
 <div class="overlay hidden" id="planOverlay">
   <div class="panel modal-box">
@@ -695,11 +754,14 @@ function render() {
       if (j.status === "done") {
         // stabilny cache-buster: zmienia sie tylko po ponownej obrobce
         const after = `/done/${j.result}?t=${j.id}-${j.seconds || 0}`;
+        const editBtn = j.editable !== false
+          ? `<button class="edit-btn" onclick="event.stopPropagation();openEditor('${j.id}')" title="Edytor maski (pędzel)">✏️</button>`
+          : "";
         thumb = j.orig
           ? `<img src="${after}" data-after="${after}" data-before="/originals/${esc(j.orig)}"
                onclick="toggleBA(this)" title="Kliknij: przed / po" style="cursor:pointer">
-             <span class="ba-tag">PO</span>`
-          : `<img src="${after}">`;
+             <span class="ba-tag">PO</span>${editBtn}`
+          : `<img src="${after}">${editBtn}`;
       }
       if (j.status === "error") thumb = `<span style="font-size:30px">⚠️</span>`;
       if (j.status === "queued") thumb = `<span style="font-size:26px;color:var(--muted)">⏳</span>`;
@@ -1314,6 +1376,183 @@ async function rollbackPlan() {
   $("planBody").innerHTML = `<p style="color:var(--ok);font-size:15px">↩ Przywrócono ${data.restored} poprzednich zdjęć oferty.</p>`;
   loadOffers(true);
 }
+
+// ---------- edytor maski (pędzel) ----------
+const ed = {
+  jobId: null, rgb: null, mask: null, maskCtx: null, tmp: null, tmpCtx: null,
+  mode: "restore", size: 36, undo: [],
+  drawing: false, last: null,
+};
+
+async function openEditor(jobId) {
+  let data;
+  try {
+    const res = await api(`/api/jobs/${jobId}/editor`);
+    data = await res.json();
+  } catch { return; }
+  if (data.error) { alert(data.error); return; }
+  ed.jobId = jobId;
+  ed.undo = [];
+  $("edTitle").textContent = data.name;
+  $("edStatus").textContent = "";
+  $("edBrushTools").style.display = data.editable ? "flex" : "none";
+  $("edApply").style.display = data.editable ? "" : "none";
+
+  const rgb = new Image(), alpha = new Image();
+  await Promise.all([
+    new Promise(r => { rgb.onload = r; rgb.src = data.rgb; }),
+    new Promise(r => { alpha.onload = r; alpha.src = data.alpha; }),
+  ]);
+  ed.rgb = rgb;
+  ed.mask = document.createElement("canvas");
+  ed.mask.width = rgb.naturalWidth; ed.mask.height = rgb.naturalHeight;
+  ed.maskCtx = ed.mask.getContext("2d");
+  if (data.editable) {
+    ed.maskCtx.drawImage(alpha, 0, 0);
+    edNormalizeMask();  // PNG L: jasnosc -> kanal alfa (source-in patrzy na alfe)
+  } else {
+    ed.maskCtx.fillStyle = "#fff";
+    ed.maskCtx.fillRect(0, 0, ed.mask.width, ed.mask.height);
+  }
+  ed.tmp = document.createElement("canvas");
+  ed.tmp.width = rgb.naturalWidth; ed.tmp.height = rgb.naturalHeight;
+  ed.tmpCtx = ed.tmp.getContext("2d");
+
+  $("edBefore").src = data.rgb;
+  const result = $("edResult");
+  result.width = rgb.naturalWidth; result.height = rgb.naturalHeight;
+  edComposite();
+  $("edSplit").value = 100;
+  edSplitUpdate();
+  $("editorOverlay").classList.remove("hidden");
+}
+
+function edComposite() {
+  // tmp = rgb maskowane alpha (luminancja maski -> kanal alfa)
+  const t = ed.tmpCtx;
+  t.globalCompositeOperation = "source-over";
+  t.clearRect(0, 0, ed.tmp.width, ed.tmp.height);
+  t.drawImage(ed.mask, 0, 0);
+  t.globalCompositeOperation = "source-in";
+  t.drawImage(ed.rgb, 0, 0);
+  const r = $("edResult").getContext("2d");
+  r.fillStyle = "#fff";
+  r.fillRect(0, 0, ed.tmp.width, ed.tmp.height);
+  r.drawImage(ed.tmp, 0, 0);
+}
+
+// maska jako luminancja: rysujemy biel/czern, ale do source-in potrzeba alfy -
+// czarne obszary maski musza byc przezroczyste. Po kazdym pociagnieciu
+// przeksztalcamy czern w przezroczystosc.
+function edNormalizeMask() {
+  const c = ed.maskCtx;
+  const img = c.getImageData(0, 0, ed.mask.width, ed.mask.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i + 3] = Math.max(d[i], d[i + 1], d[i + 2]); // alfa = jasnosc
+  }
+  c.putImageData(img, 0, 0);
+}
+
+function edPos(e) {
+  // canvas ma object-fit:contain - bitmapa jest letterboxowana w elemencie,
+  // wiec uwzgledniamy skale i marginesy, inaczej pedzel laduje w zlym miejscu
+  const rect = $("edResult").getBoundingClientRect();
+  const cw = ed.mask.width, ch = ed.mask.height;
+  const scale = Math.min(rect.width / cw, rect.height / ch);
+  const offX = (rect.width - cw * scale) / 2;
+  const offY = (rect.height - ch * scale) / 2;
+  return {
+    x: (e.clientX - rect.left - offX) / scale,
+    y: (e.clientY - rect.top - offY) / scale,
+  };
+}
+
+function edStroke(from, to) {
+  const c = ed.maskCtx;
+  c.globalCompositeOperation = ed.mode === "restore"
+    ? "source-over" : "destination-out";
+  c.strokeStyle = "#fff";
+  c.lineWidth = ed.size;
+  c.lineCap = "round";
+  c.lineJoin = "round";
+  c.beginPath();
+  c.moveTo(from.x, from.y);
+  c.lineTo(to.x, to.y);
+  c.stroke();
+}
+
+function bindEditor() {
+  const result = $("edResult");
+  result.addEventListener("pointerdown", e => {
+    if ($("edBrushTools").style.display === "none") return;
+    ed.undo.push(ed.maskCtx.getImageData(0, 0, ed.mask.width, ed.mask.height));
+    if (ed.undo.length > 15) ed.undo.shift();
+    ed.drawing = true;
+    ed.last = edPos(e);
+    edStroke(ed.last, ed.last);
+    edComposite();
+    result.setPointerCapture(e.pointerId);
+  });
+  result.addEventListener("pointermove", e => {
+    if (!ed.drawing) return;
+    const p = edPos(e);
+    edStroke(ed.last, p);
+    ed.last = p;
+    edComposite();
+  });
+  result.addEventListener("pointerup", () => { ed.drawing = false; });
+
+  $("edRestore").addEventListener("click", () => {
+    ed.mode = "restore";
+    $("edRestore").classList.add("on"); $("edErase").classList.remove("on");
+  });
+  $("edErase").addEventListener("click", () => {
+    ed.mode = "erase";
+    $("edErase").classList.add("on"); $("edRestore").classList.remove("on");
+  });
+  $("edBrushSize").addEventListener("input", e => ed.size = +e.target.value);
+  $("edUndo").addEventListener("click", () => {
+    const prev = ed.undo.pop();
+    if (prev) { ed.maskCtx.putImageData(prev, 0, 0); edComposite(); }
+  });
+  $("edSplit").addEventListener("input", edSplitUpdate);
+  $("edClose").addEventListener("click", () => $("editorOverlay").classList.add("hidden"));
+  $("edApply").addEventListener("click", edApply);
+}
+
+function edSplitUpdate() {
+  const pct = +$("edSplit").value;
+  const result = $("edResult");
+  result.style.clipPath = `inset(0 0 0 ${100 - pct}%)`;
+  const line = $("edSplitLine");
+  if (pct > 0 && pct < 100) {
+    const rect = result.getBoundingClientRect();
+    const stage = $("edStage").getBoundingClientRect();
+    line.style.display = "block";
+    line.style.left = (rect.left - stage.left + rect.width * (100 - pct) / 100) + "px";
+  } else line.style.display = "none";
+}
+
+async function edApply() {
+  $("edApply").disabled = true; $("edApply").textContent = "Przeliczanie...";
+  $("edStatus").textContent = "";
+  const blob = await new Promise(r => ed.mask.toBlob(r, "image/png"));
+  const fd = optionsForm(new FormData());
+  fd.append("mask", blob, "mask.png");
+  let data;
+  try {
+    const res = await api(`/api/jobs/${ed.jobId}/recompose`, { method: "POST", body: fd });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  $("edApply").disabled = false; $("edApply").textContent = "💾 Zastosuj i przelicz";
+  if (data.error) { $("edStatus").textContent = "Błąd: " + data.error; return; }
+  $("edStatus").textContent = "✅ Zapisano - karta odświeżona";
+  lastJobsKey = "";  // wymus przerysowanie miniatur
+  refresh();
+}
+
+bindEditor();
 
 // ---------- IdoSell ----------
 let idoOffset = 0;
