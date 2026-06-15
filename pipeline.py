@@ -1,14 +1,10 @@
 """Silnik obrobki zdjec: BiRefNet + cien + kolory + wyostrzanie.
 
 Uzywany przez app.py (aplikacja webowa). Parametry przekazywane per zadanie.
-
-Scalony z bg-removerem (jakosc obrobki) + wlasne mask_contrast/mask_brightness
-(podbicie wejscia do maski - odzysk niskokontrastowych fragmentow).
 """
 from io import BytesIO
-from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
 
 _session = None
 
@@ -16,20 +12,23 @@ DEFAULTS = {
     "size": 1600,            # bok kwadratu wyjsciowego
     "padding": 0.90,         # maks. udzial produktu w kadrze
     "max_upscale": 3.0,      # maks. powiekszenie malych zdjec
-    "shadow": True,          # miekki cien-kaluza pod produktem
-    "shadow_opacity": 0.18,  # krycie cienia (widoczny, naturalny)
-    "shadow_blur": 11,       # rozmycie cienia
+    "shadow": True,          # cien wlaczony (master)
+    "shadow_mode": "auto",   # auto | preserve | minimal | none - patrz compose()
+    "shadow_opacity": 0.24,  # krycie MINIMALNEGO cienia kontaktowego (gdy brak realnego)
+    "shadow_blur": 11,       # (zachowane dla zgodnosci UI; minimal liczy blur z wysokosci)
+    "shadow_detect_drop": 6.0,  # o ile pas pod podeszwa ciemniejszy od tla = realny cien
+    "preserve_plate_pct": 88,   # percentyl jasnosci tla -> punkt bieli przy ZACHOWAJ
     "colors": True,          # podbicie kolorow (delikatne, naturalne)
     "saturation": 1.02,
     "contrast": 1.0,         # bez podbicia kontrastu (naturalnie)
-    "sharpen": True,         # unsharp po upscale > 1.3x
+    "sharpen": True,         # unsharp po upscale > 1.2x
     "whiten_neutral": True,  # jasne neutralne piksele (podeszwa) -> ku bieli
     "edge_feather": 1.0,     # wtopienie krawedzi maski w px
     "mirror": False,         # odbicie lustrzane (standaryzacja kierunku noska)
     # podbicie kontrastu/jasnosci TYLKO do policzenia maski - model lepiej
     # lapie niskokontrastowe fragmenty (szary element na jasnym tle);
     # finalny obraz skladany z ORYGINALNYCH pikseli, kolory bez zmian.
-    # 1.0/1.0 = wylaczone. Zweryfikowane na 4576_1 (odzyskany jezyk pisty).
+    # 1.0/1.0 = wylaczone. Przeniesione z idosell-remover (4576).
     "mask_contrast": 1.8,
     "mask_brightness": 0.8,
 }
@@ -62,6 +61,14 @@ def refine_edges(rgba: Image.Image, feather: float) -> Image.Image:
     a = a.point(lambda v: 0 if v < 40 else 255 if v > 200 else
                 int((v - 40) * 255 / 160))
     return Image.merge("RGBA", (r, g, b, a))
+
+
+def _shadow_layer(alpha, size, obj_x, obj_y, obj_h, offset_frac, blur, opacity):
+    offset = max(4, int(obj_h * offset_frac))
+    layer = Image.new("L", size, 0)
+    layer.paste(alpha, (obj_x, obj_y + offset))
+    layer = layer.filter(ImageFilter.GaussianBlur(blur))
+    return layer.point(lambda v: int(v * opacity))
 
 
 def object_bbox(rgba: Image.Image):
@@ -112,59 +119,8 @@ def whiten_neutral(rgba: Image.Image) -> Image.Image:
     return Image.fromarray(arr.astype("uint8"), "RGBA")
 
 
-def compose(rgba: Image.Image, opt: dict) -> Image.Image:
-    """Crop do obiektu, skalowanie, cien, biale tlo, kolory."""
-    size = (int(opt["size"]), int(opt["size"]))
-    full_bleed = is_full_bleed(rgba)
-    # zawsze kadrujemy do obiektu (tlo juz wyciete) - usuwa szare marginesy
-    bbox = object_bbox(rgba)
-    if bbox:
-        rgba = rgba.crop(bbox)
-
-    if opt.get("whiten_neutral", True):
-        rgba = whiten_neutral(rgba)  # podeszwa -> blizej bieli, kolor nietkniety
-
-    obj_w, obj_h = rgba.size
-    if full_bleed:
-        # detal: wypelnij CALY kadr (cover) - zero bialych ramek, nadmiar przyciety
-        ratio = min(max(size[0] / obj_w, size[1] / obj_h),
-                    float(opt["max_upscale"]))
-    else:
-        max_dim = int(min(size) * float(opt["padding"]))
-        ratio = min(max_dim / obj_w, max_dim / obj_h, float(opt["max_upscale"]))
-    if ratio != 1:
-        rgba = rgba.resize(
-            (int(obj_w * ratio), int(obj_h * ratio)), Image.LANCZOS)
-        # bardzo delikatnie - tylko zeby odzyskac ostrosc po skalowaniu,
-        # bez "chrupania" faktury
-        if opt["sharpen"] and ratio > 1.3:
-            rgba = rgba.filter(
-                ImageFilter.UnsharpMask(radius=1.0, percent=22, threshold=3))
-
-    canvas = Image.new("RGBA", size, (255, 255, 255, 255))
-    obj_w, obj_h = rgba.size
-    obj_x = (size[0] - obj_w) // 2
-    obj_y = (size[1] - obj_h) // 2
-
-    if opt["shadow"] and not full_bleed:
-        # miekki cien-kaluza pod butem: sylwetka przesunieta w dol na tyle,
-        # by wystawala spod buta + rozmycie + widoczne krycie
-        alpha = rgba.split()[3]
-        op = float(opt["shadow_opacity"])
-        off = max(8, int(obj_h * 0.045))
-        layer = Image.new("L", size, 0)
-        layer.paste(alpha, (obj_x, obj_y + off))
-        layer = layer.filter(
-            ImageFilter.GaussianBlur(max(6, int(opt["shadow_blur"]) * 1.8)))
-        layer = layer.point(lambda v: int(v * op))
-        black = Image.new("RGBA", size, (0, 0, 0, 255))
-        black.putalpha(layer)
-        canvas.alpha_composite(black)
-
-    canvas.alpha_composite(rgba, (obj_x, obj_y))
-    final = canvas.convert("RGB")
-
-    if opt["colors"]:
+def _apply_colors(final: Image.Image, opt: dict) -> Image.Image:
+    if opt.get("colors"):
         if float(opt["saturation"]) != 1.0:
             final = ImageEnhance.Color(final).enhance(float(opt["saturation"]))
         if float(opt["contrast"]) != 1.0:
@@ -172,10 +128,157 @@ def compose(rgba: Image.Image, opt: dict) -> Image.Image:
     return final
 
 
+def _luma(arr):
+    return 0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]
+
+
+def has_real_shadow(src_rgb: Image.Image, alpha: Image.Image, drop=6.0) -> bool:
+    """Czy oryginal ma realny cien studyjny pod butem - pas tla tuz pod
+    podeszwa wyraznie ciemniejszy od czystego tla. Gdy but dotyka dolu kadru
+    (brak miejsca na pas) -> False (pojdzie tryb minimal)."""
+    import numpy as np
+    lum = _luma(np.asarray(src_rgb.convert("RGB")).astype(np.float32))
+    m = np.asarray(alpha) > 128
+    if not m.any():
+        return False
+    ys, xs = np.where(m)
+    y1, x0, x1 = int(ys.max()), int(xs.min()), int(xs.max())
+    h, H = int(ys.max() - ys.min() + 1), lum.shape[0]
+    y_lo, y_hi = y1 + 2, min(H, y1 + 2 + max(4, int(h * 0.08)))
+    bg = ~m
+    if y_hi - y_lo < 3 or bg.sum() < 100:
+        return False
+    band = lum[y_lo:y_hi, x0:x1 + 1]
+    ref = float(np.percentile(lum[bg], 70))
+    return float(np.median(band)) < ref - float(drop)
+
+
+def preserve_to_white(src_rgb, alpha, plate_pct=88) -> Image.Image:
+    """Tlo studyjne -> biel z ZACHOWANIEM realnego cienia (z luminancji, wiec
+    neutralny - bez koloru tla), na to ostry wybielony but. Pelna klatka."""
+    import numpy as np
+    lum = _luma(np.asarray(src_rgb.convert("RGB")).astype(np.float32))
+    bg = ~(np.asarray(alpha) > 128)
+    plate = max(1.0, float(np.percentile(lum[bg], plate_pct)))
+    g = np.clip(lum * (255.0 / plate), 0, 255).astype("uint8")
+    gi = Image.fromarray(g, "L")
+    base = Image.merge("RGB", (gi, gi, gi)).convert("RGBA")
+    shoe = src_rgb.convert("RGB").copy()
+    shoe.putalpha(alpha)
+    base.alpha_composite(whiten_neutral(shoe))
+    return base.convert("RGB")
+
+
+def _scale_to_pad(img, size, padding, max_upscale, sharpen):
+    max_dim = int(min(size) * float(padding))
+    w, h = img.size
+    ratio = min(max_dim / w, max_dim / h, float(max_upscale))
+    if ratio != 1:
+        img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+        if sharpen and ratio > 1.3:
+            img = img.filter(
+                ImageFilter.UnsharpMask(radius=1.0, percent=22, threshold=3))
+    return img
+
+
+def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.Image:
+    """Skladanie na biale tlo z cieniem. Tryby (opt['shadow_mode']):
+      - full-bleed (detal): cover, bez cienia (jak dotad),
+      - ZACHOWAJ: gdy oryginal ma realny cien -> tlo->biel z jego zachowaniem,
+      - MINIMAL: brak realnego cienia -> cienka linia kontaktu pod podeszwa.
+    src_rgb (oryginal sprzed wyciecia) potrzebny do trybu ZACHOWAJ; bez niego
+    (np. edytor maski) zawsze MINIMAL."""
+    size = (int(opt["size"]), int(opt["size"]))
+    full_bleed = is_full_bleed(rgba)
+    alpha_full = rgba.split()[3]
+    shadow_on = bool(opt.get("shadow", True))
+    mode = opt.get("shadow_mode", "auto")
+
+    # ---- FULL-BLEED (zblizenie/detal): tlo->biel z ZACHOWANIEM kadrowania ----
+    # Stary cover wycinal buta i skalowal bbox - na ukosnym zblizeniu rogi bboxa
+    # byly przezroczyste -> bialy naroznik ("ramka"). Teraz bielimy tlo w miejscu
+    # (preserve_to_white) i cover-skalujemy CALY kadr (nieprzezroczysty: biel+but),
+    # wiec but zostaje przy krawedziach jak w oryginale, bez ramki.
+    if full_bleed:
+        if src_rgb is not None:
+            pimg = preserve_to_white(
+                src_rgb, alpha_full, int(opt.get("preserve_plate_pct", 88)))
+        else:  # edytor maski: zloz wyciety but na bieli (brak oryginalu tla)
+            pimg = Image.new("RGB", rgba.size, (255, 255, 255))
+            pimg.paste(rgba.convert("RGB"), (0, 0), alpha_full)
+        w, h = pimg.size
+        ratio = min(max(size[0] / w, size[1] / h), float(opt["max_upscale"]))
+        if ratio != 1:
+            pimg = pimg.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+            if opt["sharpen"] and ratio > 1.3:
+                pimg = pimg.filter(
+                    ImageFilter.UnsharpMask(radius=1.0, percent=22, threshold=3))
+        canvas = Image.new("RGB", size, (255, 255, 255))
+        nw, nh = pimg.size
+        canvas.paste(pimg, ((size[0] - nw) // 2, (size[1] - nh) // 2))
+        return _apply_colors(canvas, opt)
+
+    # ---- ZACHOWAJ: realny cien z oryginalu ----
+    want_preserve = shadow_on and src_rgb is not None and mode in ("auto", "preserve")
+    if want_preserve and (mode == "preserve" or has_real_shadow(
+            src_rgb, alpha_full, opt.get("shadow_detect_drop", 6.0))):
+        import numpy as np
+        pimg = preserve_to_white(
+            src_rgb, alpha_full, int(opt.get("preserve_plate_pct", 88)))
+        a = np.asarray(alpha_full) > 128
+        ys, xs = np.where(a)
+        x0, x1, y0, y1 = int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())
+        w, h = x1 - x0 + 1, y1 - y0 + 1
+        # skala PO SAMYM BUCIE (jak minimal) - rozmiar buta spojny w katalogu;
+        # realny cien zostaje w obrazie i laduje w dolnym/bocznym marginesie.
+        max_dim = int(min(size) * float(opt["padding"]))
+        ratio = min(max_dim / w, max_dim / h, float(opt["max_upscale"]))
+        if ratio != 1:
+            pimg = pimg.resize((int(pimg.width * ratio),
+                                int(pimg.height * ratio)), Image.LANCZOS)
+            if opt["sharpen"] and ratio > 1.3:
+                pimg = pimg.filter(
+                    ImageFilter.UnsharpMask(radius=1.0, percent=22, threshold=3))
+        # wysrodkuj BBOX BUTA w kadrze (jak minimal); biale tlo pimg = niewidoczne
+        scx = (x0 + x1 + 1) / 2 * ratio
+        scy = (y0 + y1 + 1) / 2 * ratio
+        canvas = Image.new("RGB", size, (255, 255, 255))
+        canvas.paste(pimg, (int(size[0] / 2 - scx), int(size[1] / 2 - scy)))
+        return _apply_colors(canvas, opt)
+
+    # ---- MINIMAL: wytnij + (opcjonalnie) cienka linia kontaktu ----
+    bbox = object_bbox(rgba)
+    if bbox:
+        rgba = rgba.crop(bbox)
+    if opt.get("whiten_neutral", True):
+        rgba = whiten_neutral(rgba)
+    rgba = _scale_to_pad(rgba, size, opt["padding"], opt["max_upscale"],
+                         opt["sharpen"])
+    canvas = Image.new("RGBA", size, (255, 255, 255, 255))
+    ow, oh = rgba.size
+    ox, oy = (size[0] - ow) // 2, (size[1] - oh) // 2
+    if shadow_on and mode != "none":
+        # cienka linia kontaktu: sylwetka zsunieta minimalnie + maly blur
+        alpha = rgba.split()[3]
+        op = float(opt["shadow_opacity"])
+        off = max(3, int(oh * 0.012))
+        blur = max(5, int(oh * 0.011))
+        layer = Image.new("L", size, 0)
+        layer.paste(alpha, (ox, oy + off))
+        layer = layer.filter(ImageFilter.GaussianBlur(blur))
+        layer = layer.point(lambda v: int(v * op))
+        black = Image.new("RGBA", size, (0, 0, 0, 255))
+        black.putalpha(layer)
+        canvas.alpha_composite(black)
+    canvas.alpha_composite(rgba, (ox, oy))
+    return _apply_colors(canvas.convert("RGB"), opt)
+
+
 MAX_INPUT_PX = 2048  # wieksze wejscia zmniejszamy (model i tak liczy na 1024)
 
-# AI upscale malych zrodel (Real-ESRGAN ncnn-vulkan). Binarka opcjonalna -
-# gdy jej brak, funkcja zwraca oryginal (pipeline dziala zwyklym skalowaniem).
+# AI upscale malych zrodel (Real-ESRGAN ncnn-vulkan, dziala na AMD przez Vulkan)
+from pathlib import Path
+
 REALESRGAN_EXE = Path(__file__).parent / "tools" / "realesrgan" / \
     "realesrgan-ncnn-vulkan.exe"
 AI_UPSCALE_BELOW = 800   # zrodla mniejsze niz tyle px -> AI upscale 4x
@@ -209,7 +312,7 @@ def ai_upscale(img: Image.Image) -> Image.Image:
 
 def process_bytes(data: bytes, opt: dict, with_parts: bool = False):
     """Pelny pipeline: bajty zdjecia -> gotowy obraz PIL.
-    with_parts=True: dodatkowo (rgb roboczy, alpha, full_bleed) dla edytora."""
+    with_parts=True: dodatkowo (rgba robocze, full_bleed) dla edytora."""
     import gc
     import time
 
@@ -258,8 +361,11 @@ def process_bytes(data: bytes, opt: dict, with_parts: bool = False):
     rgba = src.convert("RGBA")
     rgba.putalpha(seg.split()[3])
     full_bleed = is_full_bleed(rgba)
+    # ZAWSZE wycinamy tlo (wczesniej full-bleed zostawial szare tlo +
+    # biale ramki). Przy detalu po prostu wypelniamy kadr (padding 1.0).
     rgba = refine_edges(rgba, float(options["edge_feather"]))
-    final = compose(rgba, options)
+    # src (oryginal sprzed wyciecia) -> tryb ZACHOWAJ moze odzyskac realny cien
+    final = compose(rgba, options, src_rgb=src)
     if with_parts:
         # czesci robocze dla edytora maski: PRAWDZIWY oryginal (src) jako rgb
         # (rembg zeruje tlo na czarno - 'Przywroc' odslanialoby czern) +
