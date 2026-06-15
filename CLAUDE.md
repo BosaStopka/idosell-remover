@@ -20,6 +20,20 @@ zostal w kodzie tymczasowo (nieaktywny bez configow) - docelowo do wyciecia.
 4. **Interpunkcja** - zwykly myslnik `-`, nigdy polpauza/pauza (globalna
    zasada uzytkownika).
 
+## Wzorzec bezpieczenstwa zapisu (OBOWIAZKOWY)
+
+Przeniesione z bg-remover - tam brak backupu opisu raz spowodowal
+nieodwracalna utrate tresci. Kazda operacja zmieniajaca dane na IdoSell MUSI:
+1. **Backup PELNEGO stanu PRZED zapisem** - wszystko co modyfikujemy
+   (zdjecia + CALY opis: tekst i zdjecia), zapis lokalny per produkt.
+2. **Rollback przywracajacy stan 1:1** z backupu, jednym klikiem w UI
+   (zweryfikowane w bg-remover: wraca dokladnie do oryginalu).
+3. **Backup oddzielny per produkt** - rollback niezalezny dla kazdego.
+4. **Dziennik append-only** - kazdy zapis logowany.
+5. Po recznej zmianie na platformie nie uzywac rollbacku (cofa do starego
+   backupu); kolejny zapis przez aplikacje czyta dane na zywo i nadpisuje
+   backup swiezym stanem.
+
 ## Git
 
 - Osobne repo (kopia bg-remover z 2026-06-12), galaz `main`, jednoosobowo
