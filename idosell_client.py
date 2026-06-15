@@ -297,6 +297,12 @@ ICON_TYPES = ("shop", "auction", "group")
 # shop = zdjecie na liscie towarow, group = dla towaru w grupie,
 # auction = "zdjecie bez tla" (panel: 3 sloty nad galeria)
 
+# Ikon "shop" (glowna) NIE ustawiamy przez API: IdoSell generuje ja
+# z glownego zdjecia galerii (slot #1) i trzyma we wlasnym kadrze
+# 350x350; jawny PUT z naszym kwadratem ja czysci zamiast ustawic
+# (4576, 2026-06-15). Sterujemy nia wylacznie kolejnoscia galerii.
+SETTABLE_ICON_TYPES = ("auction", "group")
+
 _ICON_FIELDS = {"shop": "productIcon", "auction": "productAuctionIcon",
                 "group": "productGroupIcon"}
 

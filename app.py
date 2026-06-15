@@ -1237,7 +1237,7 @@ def idosell_product_process(product_id):
                        "url": d["url"],
                        "action": d["action"],
                        "icons": [t for t in (d.get("icons") or [])
-                                 if t in idosell_client.ICON_TYPES]}
+                                 if t in idosell_client.SETTABLE_ICON_TYPES]}
                       for i, d in enumerate(decisions)],
     }
     (out_dir / "plan.json").write_text(
@@ -1527,9 +1527,12 @@ def idosell_product_rollback(product_id):
             images_b64.append(base64.b64encode(path.read_bytes()).decode())
 
         # ikony: byly -> przywroc z backupu; nie bylo -> skasuj nasza
+        # (tylko ustawialne typy; shop zostawiamy IdoSellowi)
         icons_restore = {}
         icons_to_delete = []
         for entry in plan.get("backup_icons") or []:
+            if entry["type"] not in idosell_client.SETTABLE_ICON_TYPES:
+                continue
             if entry["existed"] and entry.get("file"):
                 path = ORIGINALS_DIR / entry["file"]
                 if not path.exists():
