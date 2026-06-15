@@ -895,7 +895,8 @@ function renderPick() {
         <button class="keep ${it.action === "keep" ? "on" : ""}" onclick="setPick(${i},'keep')">Zostaw</button>
         <button class="delete ${it.action === "delete" ? "on" : ""}" onclick="setPick(${i},'delete')">Usuń</button>
       </div>
-      ${pickState.source === "idosell" ? `<div class="icon-row" title="Przypnij zdjęcie do slotu panelu IdoSell (ikona Listy = zdjęcie #1, ustaw przez ★)">
+      ${pickState.source === "idosell" ? `<div class="icon-row" title="Przypnij zdjęcie do slotu panelu IdoSell">
+        <button class="${(it.icons || []).includes("shop") ? "on" : ""}" onclick="toggleIcon(${i},'shop')">Lista</button>
         <button class="${(it.icons || []).includes("group") ? "on" : ""}" onclick="toggleIcon(${i},'group')">Grupa</button>
         <button class="${(it.icons || []).includes("auction") ? "on" : ""}" onclick="toggleIcon(${i},'auction')">Bez tła</button>
       </div>` : ""}
@@ -903,13 +904,12 @@ function renderPick() {
   const c = a => pickState.items.filter(x => x.action === a).length;
   let iconInfo = "";
   if (pickState.source === "idosell") {
-    const mainIdx = pickState.items.findIndex(x => x.action !== "delete");
-    const IC = { group: "Grupa", auction: "Bez tła" };
+    const IC = { shop: "Lista", group: "Grupa", auction: "Bez tła" };
     const parts = Object.entries(IC).map(([t, lbl]) => {
       const idx = pickState.items.findIndex(x => (x.icons || []).includes(t));
       return `${lbl}: ${idx >= 0 ? "#" + (idx + 1) : "-"}`;
     });
-    iconInfo = ` · Lista: #${mainIdx + 1} (★) · ${parts.join(" ")}`;
+    iconInfo = ` · ${parts.join(" ")}`;
   }
   $("pickSummary").textContent =
     `Obróbka: ${c("process")} · Zostaw: ${c("keep")} · Do usunięcia: ${c("delete")}${iconInfo} · kolejność = galeria`;
@@ -1050,7 +1050,7 @@ async function openIdoPlan(productId) {
   planData = plan;
 
   const LBL = { process: ["✨ obrobione", "var(--accent2)"], keep: ["bez zmian", "var(--muted)"], delete: ["🗑 usunięte", "var(--err)"] };
-  const IC = { group: "Grupa", auction: "Bez tła" };
+  const IC = { shop: "Lista", group: "Grupa", auction: "Bez tła" };
   let html = `<div class="pick-grid">`;
   for (const it of plan.items) {
     const [lbl, color] = LBL[it.action];
@@ -1087,12 +1087,10 @@ function renderIdoConfirm() {
   const del = planData.items.filter(i => i.action === "delete");
   const keep = planData.items.filter(i => i.action === "keep");
   const upKb = up.reduce((s, i) => s + (i.size_kb || 0), 0);
-  const IC = { group: "Grupa", auction: "Bez tła" };
-  const mainItem = planData.items.find(i => i.action !== "delete");
+  const IC = { shop: "Lista", group: "Grupa", auction: "Bez tła" };
   const iconParts = planData.items
     .filter(i => (i.icons || []).length && i.action !== "delete")
     .map(i => `${(i.icons || []).map(t => IC[t]).join("+")} ← zdjęcie #${i.index}`);
-  if (mainItem) iconParts.unshift(`Lista ← zdjęcie #${mainItem.index} (1. w galerii)`);
   $("planGo").classList.add("hidden");
   $("planBody").innerHTML = `
     <div class="allegro-note" style="border-color:var(--err)">
@@ -1142,7 +1140,7 @@ async function executeIdoPlan() {
     return;
   }
   const v = data.verify || {};
-  const IC = { group: "Grupa", auction: "Bez tła" };
+  const IC = { shop: "Lista", group: "Grupa", auction: "Bez tła" };
   const iconsLine = (data.icons_set || []).length
     ? `<p style="font-size:13px;margin-top:4px;color:${v.icons_ok === false ? "var(--err)" : "var(--ok)"}">
         Ikony panelu (${data.icons_set.map(t => IC[t]).join(", ")}): ${v.icons_ok === false ? `⚠ brak: ${(v.icons_missing||[]).map(t => IC[t]).join(", ")}` : "✓ ustawione"}
@@ -1400,9 +1398,8 @@ async function processIdoProduct(id, btn) {
       action: (data.suggestions || [])[i] || "process",
       suggested: (data.suggestions || [])[i] === "keep",
       index: i + 1,
-      // domyslnie zdjecie nr 1 -> ikona grupy; ikona Listy (shop) idzie
-      // za zdjeciem #1 automatycznie (IdoSell, nie ustawiamy przez API)
-      icons: i === 0 ? ["group"] : [],
+      // domyslnie zdjecie nr 1 -> Lista + Grupa
+      icons: i === 0 ? ["shop", "group"] : [],
     })),
     btn,
   };

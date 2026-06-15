@@ -297,11 +297,11 @@ ICON_TYPES = ("shop", "auction", "group")
 # shop = zdjecie na liscie towarow, group = dla towaru w grupie,
 # auction = "zdjecie bez tla" (panel: 3 sloty nad galeria)
 
-# Ikon "shop" (glowna) NIE ustawiamy przez API: IdoSell generuje ja
-# z glownego zdjecia galerii (slot #1) i trzyma we wlasnym kadrze
-# 350x350; jawny PUT z naszym kwadratem ja czysci zamiast ustawic
-# (4576, 2026-06-15). Sterujemy nia wylacznie kolejnoscia galerii.
-SETTABLE_ICON_TYPES = ("auction", "group")
+# Ikona "shop" (glowna / "zdjecie na liscie towarow") - probujemy ja
+# ustawiac przez API przy zapisie GLOBALNYM (bez shopId). Wczesniejsze
+# czyszczenie ikony shop wystepowalo przy zapisie per-sklep (shopId:1);
+# pod zapisem globalnym testujemy ponownie (4576, 2026-06-15).
+SETTABLE_ICON_TYPES = ("shop", "auction", "group")
 
 _ICON_FIELDS = {"shop": "productIcon", "auction": "productAuctionIcon",
                 "group": "productGroupIcon"}
