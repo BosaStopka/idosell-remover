@@ -1666,29 +1666,34 @@ def ido_verify_gallery(product_id: int, expected_count: int,
     return out
 
 
-@app.post("/api/idosell/products/<int:product_id>/execute")
-def idosell_product_execute(product_id):
-    """Wykonuje plan W SKLEPIE: backup na dysk, PUT galerii w sloty 1..N
-    (bez okna z pusta galeria), kasowanie nadmiarowych slotow, weryfikacja
-    GET-em. Wymaga jawnego confirm z UI (drugi stopien potwierdzenia)."""
-    body = request.get_json(silent=True) or {}
-    if body.get("confirm") is not True:
-        return jsonify({"error": "Brak potwierdzenia"}), 400
+class IdoExecError(Exception):
+    """Blad wykonania planu z kodem HTTP - wspolny dla pojedynczego
+    i wsadowego zapisu."""
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
+
+
+def _ido_execute_one(product_id: int) -> dict:
+    """Rdzen zapisu planu W SKLEPIE dla jednego produktu: backup na dysk,
+    PUT galerii w sloty 1..N (bez okna z pusta galeria), kasowanie
+    nadmiarowych slotow, ikony, weryfikacja GET-em. Zwraca dict wyniku
+    albo rzuca IdoExecError(msg, status). Wspolny dla execute i bulk."""
     try:
         preview = build_ido_plan_preview(product_id)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 404
+        raise IdoExecError(str(e), 404)
     if not preview["ready"]:
-        return jsonify({"error": "Nie wszystkie zdjecia z planu sa obrobione"}), 409
+        raise IdoExecError("Nie wszystkie zdjecia z planu sa obrobione", 409)
     if preview["final_count"] == 0:
-        return jsonify({"error": "Plan usunalby wszystkie zdjecia produktu"}), 409
+        raise IdoExecError("Plan usunalby wszystkie zdjecia produktu", 409)
 
     # OBOWIAZKOWE archiwum oryginalow na dysku D: zanim cokolwiek nadpiszemy
     archive = archive_originals(product_id)
     if not archive.get("ok"):
-        return jsonify({"error":
-            f"Brak archiwum oryginalow - zapis wstrzymany. {archive.get('reason', '')} "
-            f"(podlacz dysk backupu albo popraw backup_dir w configu)"}), 412
+        raise IdoExecError(
+            f"Brak archiwum oryginalow - zapis wstrzymany. "
+            f"{archive.get('reason', '')}", 412)
 
     plan = load_ido_plan(product_id)
     try:
@@ -1703,10 +1708,10 @@ def idosell_product_execute(product_id):
                     if d["action"] == "keep" and d.get("image_id")}
         missing = keep_ids - current_ids
         if missing:
-            return jsonify({"error":
+            raise IdoExecError(
                 f"Zdjecia oznaczone 'Zostaw' zniknely ze sklepu "
                 f"({', '.join(sorted(missing))}) - otworz produkt "
-                f"i zapisz plan ponownie"}), 409
+                f"i zapisz plan ponownie", 409)
 
         # 2) fizyczny backup aktualnych zdjec + 3 ikon na dysk
         backup = ido_backup_gallery(product_id, current)
@@ -1726,9 +1731,9 @@ def idosell_product_execute(product_id):
                 entry = next((b for b in backup
                               if b["id"] == item["image_id"]), None)
                 if entry is None:
-                    return jsonify({"error":
+                    raise IdoExecError(
                         f"Zdjecie {item['image_id']} (Zostaw) zniknelo "
-                        f"ze sklepu - zapisz plan ponownie"}), 409
+                        f"ze sklepu - zapisz plan ponownie", 409)
                 data = (ORIGINALS_DIR / entry["file"]).read_bytes()
             b64 = base64.b64encode(data).decode()
             images_b64.append(b64)
@@ -1766,7 +1771,7 @@ def idosell_product_execute(product_id):
                                     expected_icons=sorted(icons_b64))
     except idosell_client.IdoSellError as e:
         ido_audit("execute_error", product_id, {"error": str(e)})
-        return jsonify({"error": str(e)}), 502
+        raise IdoExecError(str(e), 502)
 
     plan["backup_images"] = backup
     plan["backup_icons"] = backup_icons
@@ -1782,11 +1787,51 @@ def idosell_product_execute(product_id):
         "backup_count": len(backup),
         "verified": verify,
     })
-    return jsonify({"ok": True, "uploaded": uploaded,
-                    "final_count": final_count, "verify": verify,
-                    "icons_set": sorted(icons_b64),
-                    "archive": archive,
-                    "executed_at": plan["executed_at"]})
+    return {"ok": True, "uploaded": uploaded,
+            "final_count": final_count, "verify": verify,
+            "icons_set": sorted(icons_b64), "archive": archive,
+            "executed_at": plan["executed_at"]}
+
+
+@app.post("/api/idosell/products/<int:product_id>/execute")
+def idosell_product_execute(product_id):
+    """Pojedynczy zapis planu - wymaga jawnego confirm z UI."""
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"error": "Brak potwierdzenia"}), 400
+    try:
+        return jsonify(_ido_execute_one(product_id))
+    except IdoExecError as e:
+        return jsonify({"error": str(e)}), e.status
+
+
+@app.post("/api/idosell/bulk-execute")
+def idosell_bulk_execute():
+    """Wsadowy zapis planow wielu produktow - jedno potwierdzenie obejmuje
+    cala liste, ale KAZDY produkt przechodzi pelny wzorzec bezpieczenstwa
+    (archiwum, backup, PUT, weryfikacja GET, audyt). Wynik per produkt."""
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"error": "Brak potwierdzenia"}), 400
+    try:
+        ids = [int(x) for x in (body.get("product_ids") or [])]
+    except (TypeError, ValueError):
+        return jsonify({"error": "Nieprawidlowa lista produktow"}), 400
+    if not ids:
+        return jsonify({"error": "Pusta lista produktow"}), 400
+    results = []
+    for pid in ids:
+        try:
+            r = _ido_execute_one(pid)
+            v = r.get("verify") or {}
+            results.append({"id": pid, "ok": True, "verified": v.get("ok"),
+                            "final_count": r.get("final_count")})
+        except IdoExecError as e:
+            results.append({"id": pid, "ok": False, "error": str(e)})
+        except Exception as e:  # noqa: BLE001 - jeden produkt nie wywala calosci
+            results.append({"id": pid, "ok": False, "error": str(e)})
+    ok = sum(1 for r in results if r["ok"])
+    return jsonify({"results": results, "ok": ok, "failed": len(results) - ok})
 
 
 @app.post("/api/idosell/products/<int:product_id>/rollback")

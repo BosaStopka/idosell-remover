@@ -310,6 +310,18 @@
 </head>
 <body>
 
+<div class="overlay hidden" id="bulkOverlay">
+  <div class="panel modal-box" style="max-width:720px">
+    <h2>Wyślij wsadowo do IdoSell</h2>
+    <div id="bulkBody"></div>
+    <div class="modal-foot">
+      <span class="summary" id="bulkSummary"></span>
+      <button class="btn btn-ghost" id="bulkCancel">Zamknij</button>
+      <button class="btn btn-primary hidden" id="bulkGo" style="background:linear-gradient(135deg,#e17055,#d63031)">📤 Wyślij zaznaczone do IdoSell</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay hidden" id="editorOverlay">
   <div class="panel modal-box" style="max-width:1100px">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
@@ -467,6 +479,7 @@
       <div class="toolbar">
         <button class="btn btn-ghost" id="zipBtn">⬇ Pobierz wszystko (ZIP)</button>
         <button class="btn btn-ghost" id="clearBtn">🧹 Wyczyść zakończone</button>
+        <button class="btn btn-primary" id="bulkPushBtn" style="margin-left:auto">📤 Wyślij gotowe do IdoSell</button>
         <label class="qa-filter"><input type="checkbox" id="qaOnly"> ⚠ Tylko z uwagami QA</label>
       </div>
       <div id="cards"><div class="empty">Dodaj zdjęcia, aby zacząć</div></div>
@@ -684,6 +697,79 @@ goBtn.addEventListener("click", async () => {
   render();
 });
 $("qaOnly").addEventListener("change", e => { qaOnly = e.target.checked; render(); });
+
+// ---------- push wsadowy do IdoSell ----------
+function readyIdoGroups() {
+  const pidOf = name => { const s = name.replace(/\.[^.]+$/, ""); const m = s.match(/^(.+?)_\d+$/); return m ? m[1] : s; };
+  const groups = new Map();
+  for (const j of lastJobs) {
+    if (j.source !== "idosell") continue;
+    const pid = pidOf(j.name);
+    if (!groups.has(pid)) groups.set(pid, []);
+    groups.get(pid).push(j);
+  }
+  const out = [];
+  for (const [pid, gj] of groups) {
+    if (!gj.every(j => j.status === "done")) continue;  // tylko w pelni obrobione
+    out.push({ pid, count: gj.length, flagged: gj.filter(j => j.qa && !j.qa.ok).length });
+  }
+  return out;
+}
+$("bulkPushBtn").addEventListener("click", () => {
+  const groups = readyIdoGroups();
+  if (!groups.length) { alert("Brak w pełni obrobionych produktów IdoSell do wysłania."); return; }
+  const okCount = groups.filter(g => !g.flagged).length;
+  $("bulkBody").innerHTML = `
+    <div class="allegro-note" style="border-color:var(--err)">
+      ⚠️ <b>Za chwilę nadpiszesz galerie w sklepie IdoSell dla zaznaczonych produktów.</b>
+      Każdy przechodzi pełny wzorzec: archiwum oryginałów (D:) → backup → PUT → weryfikacja GET → audyt.
+      Produkty z uwagami QA są domyślnie odznaczone - przejrzyj je w edytorze przed wysłaniem.
+    </div>
+    <div style="max-height:300px;overflow:auto;background:var(--panel2);border-radius:10px;padding:8px 12px;margin:12px 0">
+      ${groups.map(g => `
+        <label style="display:flex;gap:10px;align-items:center;padding:5px 0;font-size:13px">
+          <input type="checkbox" class="bulk-check" value="${esc(g.pid)}" ${g.flagged ? "" : "checked"} style="accent-color:var(--accent)">
+          <span style="min-width:90px;color:var(--accent2)">ID ${esc(g.pid)}</span>
+          <span class="badge">${g.count} zdjęć</span>
+          ${g.flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ ${g.flagged} do przeglądu</span>` : `<span class="badge" style="color:var(--ok)">✓ QA OK</span>`}
+        </label>`).join("")}
+    </div>
+    <label style="display:flex;gap:10px;align-items:center;margin:8px 0;font-size:13.5px">
+      <input type="checkbox" id="bulkConfirm" style="width:18px;height:18px;accent-color:var(--err)">
+      Rozumiem, że to zmieni galerie w sklepie (mam backup i rollback per produkt)
+    </label>`;
+  $("bulkSummary").textContent = `${groups.length} gotowych · ${okCount} bez uwag QA`;
+  $("bulkGo").classList.remove("hidden");
+  $("bulkGo").disabled = true; $("bulkGo").textContent = "📤 Wyślij zaznaczone do IdoSell";
+  $("bulkOverlay").classList.remove("hidden");
+  $("bulkConfirm").addEventListener("change", e => $("bulkGo").disabled = !e.target.checked);
+});
+$("bulkCancel").addEventListener("click", () => $("bulkOverlay").classList.add("hidden"));
+$("bulkGo").addEventListener("click", async () => {
+  const ids = [...document.querySelectorAll(".bulk-check:checked")].map(c => c.value);
+  if (!ids.length) { alert("Zaznacz przynajmniej jeden produkt"); return; }
+  $("bulkGo").disabled = true; $("bulkGo").textContent = `Wysyłanie ${ids.length}...`;
+  let data;
+  try {
+    const res = await api("/api/idosell/bulk-execute", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true, product_ids: ids }),
+    });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); $("bulkGo").disabled = false; $("bulkGo").textContent = "📤 Wyślij zaznaczone do IdoSell"; return; }
+  const rows = (data.results || []).map(r =>
+    `<div style="font-size:12.5px;padding:3px 0;color:${r.ok ? (r.verified === false ? "#ff8a3d" : "var(--ok)") : "var(--err)"}">
+      ID ${esc(r.id)}: ${r.ok ? (r.verified === false ? "⚠ wysłane, weryfikacja niezgodna" : `✓ wysłane (${r.final_count} zdjęć)`) : "✗ " + esc(r.error || "")}
+    </div>`).join("");
+  $("bulkBody").innerHTML = `<p style="color:var(--ok);font-size:15px">✅ Wysłano ${data.ok}/${data.ok + data.failed} produktów.</p>
+    <div style="max-height:320px;overflow:auto;margin-top:10px">${rows}</div>
+    <p style="font-size:12.5px;color:var(--muted);margin-top:8px">Backup i rollback per produkt: originals/idosell/{ID}/ · oryginały: D:\\idosell_backup · dziennik: idosell_audit.jsonl</p>`;
+  $("bulkGo").classList.add("hidden");
+  $("bulkSummary").textContent = "";
+  loadIdoProducts(true);
+  lastJobsKey = ""; refresh();
+});
 $("zipBtn").addEventListener("click", () => location.href = "/api/zip");
 $("clearBtn").addEventListener("click", async () => {
   await api("/api/clear", { method: "POST" }); refresh();
