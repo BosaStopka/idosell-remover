@@ -506,10 +506,22 @@
         <select id="idoViewMode" style="margin-left:auto">
           <option value="all" selected>Wszystkie produkty (bez tagu Archiwum)</option>
           <option value="needs">Tylko do obróbki (wynik skanu)</option>
+          <option value="mine">Moje produkty (obrobione / plany)</option>
         </select>
       </div>
       <div class="searchbar">
-        <input type="text" id="idoSearch" placeholder="ID produktu lub fragment kodu (szuka też w tagu Archiwum i usuniętych)...">
+        <input type="text" id="idoSearch" placeholder="Wpisz ID produktu (sklepu) lub fragment kodu...">
+        <select id="idoState" class="hidden">
+          <option value="all" selected>Wszystkie moje</option>
+          <option value="processed">Obrobione</option>
+          <option value="planned">Z planem (niewysłane)</option>
+          <option value="executed">Wysłane do IdoSell</option>
+          <option value="flagged">⚠ Z uwagami QA</option>
+        </select>
+        <select id="idoSort">
+          <option value="id_asc" selected>ID ↑ rosnąco</option>
+          <option value="id_desc">ID ↓ malejąco</option>
+        </select>
         <button class="btn btn-ghost" id="idoSearchBtn">Szukaj</button>
       </div>
       <div id="idoProducts"></div>
@@ -1737,11 +1749,15 @@ async function loadIdoProducts(reset) {
   if (reset) { idoOffset = 0; $("idoProducts").innerHTML = `<div class="empty">Ładowanie...</div>`; }
   const params = new URLSearchParams({ offset: idoOffset, limit: 20 });
   let endpoint = "/api/idosell/products";
-  if ($("idoViewMode").value === "needs") {
+  const vm = $("idoViewMode").value;
+  $("idoState").classList.toggle("hidden", vm !== "mine");
+  if (vm === "needs") {
     endpoint = "/api/idosell/scan/results";
   } else {
     const q = $("idoSearch").value.trim();
     if (q) params.set("query", q);
+    params.set("sort", $("idoSort").value);
+    if (vm === "mine") { params.set("view", "mine"); params.set("state", $("idoState").value); }
   }
   let data;
   try {
@@ -1770,8 +1786,10 @@ async function loadIdoProducts(reset) {
           ${p.deleted ? `<span class="badge error">🗃 usunięty</span>` : ""}
           ${p.needs === true ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">${(p.reasons || []).includes("proporcje") ? "✂ " : "🎨 "}do obróbki${(p.reasons || []).length ? ": " + p.reasons.join("+").replace("tlo", "tło") : ""}</span>` : ""}
           ${p.needs === false ? `<span class="badge" style="color:var(--ok)">tło OK</span>` : ""}
-          ${p.processed ? `<span class="badge done">✓ obrobione</span>` : ""}
-          ${p.plan && !p.processed ? `<span class="badge">📋 plan</span>` : ""}
+          ${p.executed ? `<span class="badge done">✅ wysłane</span>`
+            : (p.processed ? `<span class="badge done">✓ obrobione</span>` : "")}
+          ${p.plan && !p.processed && !p.executed ? `<span class="badge">📋 plan</span>` : ""}
+          ${p.flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ QA</span>` : ""}
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-ghost" style="flex:1" onclick="processIdoProduct('${esc(p.id)}', this)">🪄 Obrób zdjęcia</button>
@@ -1843,6 +1861,8 @@ $("idoScanBtn").addEventListener("click", async () => {
   idoScanStatus();
 });
 $("idoViewMode").addEventListener("change", () => loadIdoProducts(true));
+$("idoSort").addEventListener("change", () => loadIdoProducts(true));
+$("idoState").addEventListener("change", () => loadIdoProducts(true));
 $("idoSearchBtn").addEventListener("click", () => loadIdoProducts(true));
 $("idoSearch").addEventListener("keydown", e => { if (e.key === "Enter") loadIdoProducts(true); });
 $("idoMoreBtn").addEventListener("click", () => loadIdoProducts(false));

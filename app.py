@@ -1293,18 +1293,123 @@ def _ido_row_ui(p: dict) -> dict:
     }
 
 
+def _ido_fetch_rows(ids: list) -> dict:
+    """Info (nazwa/kod/zdjecia) dla listy ID jednym zapytaniem (multi-ID)."""
+    if not ids:
+        return {}
+    data = idosell_client.search_products({
+        "returnProducts": "active",
+        "returnElements": idosell_client.SCAN_RETURN_ELEMENTS,
+        "productParams": [{"productId": int(i)} for i in ids],
+        "resultsPage": 0, "resultsLimit": max(100, len(ids)),
+    })
+    out = {}
+    for prod in data.get("results") or []:
+        row = _ido_row_ui(idosell_client._product_row(prod))
+        out[row["id"]] = row
+    return out
+
+
+def _ido_flagged_pids() -> set:
+    """Produkty z aktualnym ostrzezeniem QA (z biezacych zadan)."""
+    out = set()
+    with lock:
+        for jid in job_order:
+            j = jobs[jid]
+            if (j.get("source") == "idosell" and j.get("status") == "done"
+                    and j.get("qa") and not j["qa"].get("ok")):
+                out.add(extract_product_id(Path(j["name"]).stem))
+    return out
+
+
+def _ido_mine_index(state: str, query: str) -> list:
+    """Lokalny indeks produktow ktore dotknelismy (done/ z planem IdoSell):
+    (productId, stan). Filtr po stanie i po fragmencie ID."""
+    flagged = _ido_flagged_pids()
+    items = []
+    for d in DONE_DIR.iterdir():
+        if not d.is_dir() or not d.name.isdigit():
+            continue
+        if query and query not in d.name:
+            continue
+        plan_file = d / "plan.json"
+        if not plan_file.exists():
+            continue
+        try:
+            pl = json.loads(plan_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if pl.get("source") != "idosell":
+            continue  # pomijamy plany Allegro
+        pid = int(d.name)
+        st = {
+            "processed": any(d.glob("*.jpg")),
+            "plan": True,
+            "executed": bool(pl.get("executed_at")),
+            "flagged": d.name in flagged,
+        }
+        if state == "processed" and not st["processed"]:
+            continue
+        if state == "planned" and st["executed"]:
+            continue   # 'z planem' = jeszcze niewyslane
+        if state == "executed" and not st["executed"]:
+            continue
+        if state == "flagged" and not st["flagged"]:
+            continue
+        items.append((pid, st))
+    return items
+
+
 @app.get("/api/idosell/products")
 def idosell_products():
-    """Listing: bez query - kolejne strony skanu (active bez tagu Archiwum);
-    z query - wyszukiwarka ID/kod (takze otagowane i usuniete)."""
+    """Listing produktow.
+    view=catalog (domyslnie): strony skanu (active bez tagu Archiwum) lub
+      wyszukiwarka po ID/kodzie (query); sort id_asc|id_desc.
+    view=mine: produkty obrobione lokalnie (done/ z planem IdoSell) z
+      podfiltrem stanu (state) i sortowaniem."""
     query = request.args.get("query", "").strip()
     offset = int(request.args.get("offset", 0))
     limit = int(request.args.get("limit", 20))
+    sort = request.args.get("sort", "id_asc")
+    view = request.args.get("view", "catalog")
+    state = request.args.get("state", "all")
+    desc = sort == "id_desc"
     try:
+        if view == "mine":
+            items = _ido_mine_index(state, query)
+            items.sort(key=lambda t: t[0], reverse=desc)
+            total = len(items)
+            page = items[offset:offset + limit]
+            rowmap = _ido_fetch_rows([pid for pid, _ in page])
+            rows = []
+            for pid, st in page:
+                base = rowmap.get(pid) or {
+                    "id": pid, "code": None, "name": None, "image": None,
+                    "images_count": None, "archived_tag": False, "deleted": False}
+                base.update(st)
+                base.update(ido_local_flags(pid))
+                rows.append(base)
+            return jsonify({"products": rows, "total": total})
+
         if query:
             data = idosell_client.find_products(query, limit=50)
-            rows = [_ido_row_ui(p) for p in data["products"]][offset:offset + limit]
+            rows = [_ido_row_ui(p) for p in data["products"]]
+            rows.sort(key=lambda r: r["id"], reverse=desc)
+            rows = rows[offset:offset + limit]
             total = data["total"]
+        elif desc:
+            total = idosell_client.scan_page(0, 1)["total"]
+            start = max(0, total - offset - limit)
+            end = max(0, total - offset)
+            asc = []
+            if end > start:
+                p0, p1 = start // limit, (end - 1) // limit
+                for p in range(p0, p1 + 1):
+                    asc += idosell_client.scan_page(p, limit)["products"]
+                window = list(reversed(asc[start - p0 * limit:end - p0 * limit]))
+            else:
+                window = []
+            rows = [_ido_row_ui(p) for p in window]
         else:
             page = idosell_client.scan_page(offset // limit, limit)
             rows = [_ido_row_ui(p) for p in page["products"]]
