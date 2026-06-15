@@ -1414,17 +1414,21 @@ def idosell_product_execute(product_id):
 
     plan = load_ido_plan(product_id)
     try:
-        # 1) swiezy stan galerii + kontrola czy plan nie jest przeterminowany
+        # 1) swiezy stan galerii + kontrola przeterminowania planu.
+        # Tylko decyzje "Zostaw" musza miec swoje zdjecie w sklepie
+        # (bo bierzemy ich bajty ze sklepu); "Obrob" ma plik na dysku,
+        # "Usun" i tak znika - wiec puste/zmienione zdjecia zrodlowe ich
+        # nie blokuja (pozwala dosłac do recznie wyczyszczonej galerii).
         current = idosell_client.get_product_images(product_id)
         current_ids = {i["id"] for i in current}
-        plan_ids = {d.get("image_id") for d in plan["decisions"]
-                    if d.get("image_id")}
-        missing = plan_ids - current_ids
+        keep_ids = {d.get("image_id") for d in plan["decisions"]
+                    if d["action"] == "keep" and d.get("image_id")}
+        missing = keep_ids - current_ids
         if missing:
             return jsonify({"error":
-                f"Galeria w sklepie zmienila sie od zapisania planu "
-                f"(brak zdjec: {', '.join(sorted(missing))}) - "
-                f"otworz produkt i zapisz plan ponownie"}), 409
+                f"Zdjecia oznaczone 'Zostaw' zniknely ze sklepu "
+                f"({', '.join(sorted(missing))}) - otworz produkt "
+                f"i zapisz plan ponownie"}), 409
 
         # 2) fizyczny backup aktualnych zdjec + 3 ikon na dysk
         backup = ido_backup_gallery(product_id, current)
@@ -1452,13 +1456,15 @@ def idosell_product_execute(product_id):
             images_b64.append(b64)
             item_b64[item["index"]] = b64
 
-        # przypiecia ikon: te same bajty co zdjecie z galerii
+        # przypiecia ikon: te same bajty co zdjecie z galerii (tylko
+        # ustawialne typy - shop pomijamy, idzie za zdjeciem #1)
         icons_b64 = {}
         for item in preview["items"]:
             if item["action"] == "delete":
                 continue
             for typ in item.get("icons") or []:
-                icons_b64[typ] = item_b64[item["index"]]
+                if typ in idosell_client.SETTABLE_ICON_TYPES:
+                    icons_b64[typ] = item_b64[item["index"]]
 
         final_count = len(images_b64)
         leftover = [i["id"] for i in current
