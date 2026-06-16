@@ -24,6 +24,25 @@ przewijający sklep widzi tę niespójność - to obniża odbiór "premium".
 **Cel:** wybrać JEDEN standard i sprowadzić do niego cały katalog.
 Backup oryginałów (dysk D) i rollback mamy, więc operacja jest odwracalna.
 
+### Rozszerzony przegląd (kolejne realne przykłady z API)
+
+| ID | Produkt | Tło pliku | Rozmiar | Uwaga |
+|---|---|---|---|---|
+| 8522/8523/8524 | MTNG Evacare (Negro/Kaky) | **szare 242** | 1200×1200 | cała linia Evacare na szarym |
+| 7083 | MTNG Apolo | białe 255 | **1600×1600** | nasza obróbka (kwadrat) |
+| 7388 | Xero Z-Trail | białe 255 | **1540×1000** | białe, ale **nie kwadrat** |
+| 4767 | Be Lenka | białe 255 | 1200×900 | nie kwadrat |
+| 4772 | Tikki | prawie białe 247 | 900×900 | małe |
+| 8452 | Be Lenka | **przezroczyste PNG** | różne | już wycięte |
+
+Dwa dodatkowe wnioski z przeglądu:
+- **Niespójność bywa W OBRĘBIE jednej linii i jednego sklepu** - ten sam model
+  Evacare ma szare tło (242), a podobne sneakersy/Xero mają białe. To nie jest
+  "jeden dostawca = jedno tło"; bałagan jest wymieszany.
+- **Zdjęcia lifestyle/"fashion"** (np. dziecko/osoba w butach na scenie) mają
+  kolorowy narożnik - automat poprawnie je wykrywa i proponuje "Zostaw"
+  (nie ruszamy tła). Te zostają jako uzupełnienie galerii.
+
 ---
 
 ## 2. Dlaczego to ważne (poza estetyką)
