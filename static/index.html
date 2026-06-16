@@ -406,6 +406,7 @@
     <button class="tab" data-tab="idosell">IdoSell</button>
     <button class="tab" data-tab="allegro">Allegro</button>
   </nav>
+  <span id="ramBadge" class="badge" style="margin-left:16px" title="Wolna pamięć RAM - model potrzebuje ~2 GB">RAM: ...</span>
 </header>
 
 <main>
@@ -2040,6 +2041,26 @@ $("offerSearchBtn").addEventListener("click", () => loadOffers(true));
 $("offerSearch").addEventListener("keydown", e => { if (e.key === "Enter") loadOffers(true); });
 $("statusFilter").addEventListener("change", () => loadOffers(true));
 $("moreBtn").addEventListener("click", () => loadOffers(false));
+
+// ---------- wskaznik RAM (+ auto-pauza obrobki gdy krytycznie malo) ----------
+async function ramStatus() {
+  try {
+    const res = await api("/api/system");
+    const d = await res.json();
+    const gb = d.free_ram_gb;
+    const b = $("ramBadge");
+    b.textContent = d.paused_low_ram
+      ? `⏸ RAM: ${gb} GB - obróbka czeka` : `RAM: ${gb} GB`;
+    const color = gb >= 3 ? "var(--ok)" : gb >= 1.5 ? "#ff8a3d" : "var(--err)";
+    b.style.color = color;
+    b.style.border = `1px solid ${color}`;
+    b.title = gb < 1.5
+      ? "Krytycznie mało RAM - zamknij inne programy, obróbka będzie czekać"
+      : "Wolna pamięć RAM - model potrzebuje ~2 GB";
+  } catch {}
+}
+setInterval(ramStatus, 5000);
+ramStatus();
 
 // start: sprawdz czy zalogowany
 (async () => {

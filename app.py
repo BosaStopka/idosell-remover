@@ -50,6 +50,29 @@ job_order = []     # kolejnosc dodania
 queue = Queue()
 lock = threading.Lock()
 inference_busy = threading.Event()  # gdy ustawione, skan tla pauzuje
+low_ram_pause = threading.Event()   # obrobka wstrzymana - za malo RAM
+MIN_RAM_GB = 1.2                    # prog wstrzymania obrobki
+
+
+def free_ram_gb() -> float:
+    """Wolny RAM fizyczny w GB (Windows, bez zaleznosci - przez kernel32)."""
+    import ctypes
+
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+    st = MEMORYSTATUSEX()
+    st.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+    return round(st.ullAvailPhys / 1024 ** 3, 1)
 
 allegro_auth = {"status": "idle"}  # stan trwajacego device flow
 
@@ -197,6 +220,12 @@ def qa_check(out_img, alpha, full_bleed: bool) -> dict:
 def worker():
     while True:
         job_id = queue.get()
+        # przy krytycznie malym RAM czekaj zamiast mlocic skazane proby
+        # (thrashing/bad_alloc zawieszal caly serwer)
+        while free_ram_gb() < MIN_RAM_GB:
+            low_ram_pause.set()
+            time.sleep(10)
+        low_ram_pause.clear()
         with lock:
             job = jobs.get(job_id)
             if job is None:
@@ -309,6 +338,12 @@ def api_process():
         name = f.filename or f"wklejka_{int(time.time())}.png"
         created.append(submit_job(name, f.read(), options))
     return jsonify({"jobs": created})
+
+
+@app.get("/api/system")
+def api_system():
+    return jsonify({"free_ram_gb": free_ram_gb(),
+                    "paused_low_ram": low_ram_pause.is_set()})
 
 
 @app.get("/api/jobs")
