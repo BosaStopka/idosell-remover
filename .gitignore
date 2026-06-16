@@ -17,6 +17,7 @@ done/
 input/
 originals/
 masks/
+extras/
 __pycache__/
 *.pyc
 

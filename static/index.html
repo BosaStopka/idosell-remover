@@ -353,6 +353,7 @@
   </div>
 </div>
 
+<input type="file" id="idoPlanAddInput" accept="image/*" hidden>
 <div class="overlay hidden" id="planOverlay">
   <div class="panel modal-box">
     <h2 id="planTitle">Wykonanie planu na Allegro</h2>
@@ -1277,7 +1278,7 @@ $("planCancel").addEventListener("click", () => $("planOverlay").classList.add("
 async function openIdoPlan(productId) {
   planOfferId = productId;
   planSource = "idosell";
-  $("planTitle").textContent = `Plan produktu ${productId} (IdoSell)`;
+  $("planTitle").innerHTML = `Plan produktu <a href="${IDO_PANEL}${esc(productId)}" target="_blank" rel="noopener" style="color:var(--accent2)">${esc(productId)} ↗</a> (IdoSell)`;
   $("planBody").innerHTML = "Ładowanie...";
   $("planGo").classList.add("hidden");
   $("planGo").textContent = "⚠️ Potwierdzam - zmień galerię w IdoSell";
@@ -1301,6 +1302,7 @@ async function openIdoPlan(productId) {
     html += `<div class="pick" style="border-color:${color}">
       <div class="thumb">${src ? `<img src="${esc(src)}" loading="lazy" decoding="async">` : `<div class="spin"></div>`}
         ${icons ? `<span class="main-tag">📌 ${icons}</span>` : ""}
+        ${it.extra ? `<span class="fashion-tag" style="right:6px;bottom:6px;top:auto;color:#55efc4">z dysku</span>` : ""}
       </div>
       <div style="padding:8px;text-align:center;font-size:12px;color:${color}">
         ${it.index}. ${lbl}${it.action === "process" && !it.local ? " (czeka na obróbkę)" : ""}
@@ -1312,6 +1314,7 @@ async function openIdoPlan(productId) {
       </div></div>`;
   }
   html += `</div>`;
+  html += `<button class="btn btn-ghost" style="margin:2px 0 10px" onclick="$('idoPlanAddInput').click()" title="Dodaj zdjęcie z dysku (np. lepszy kadr) - obrobi się i dołączy do galerii">➕ Dodaj zdjęcie z dysku</button>`;
   if (plan.executed_at) {
     const v = plan.verified;
     html += `<p style="font-size:12.5px;color:var(--ok)">Plan wykonany ${esc(plan.executed_at)}
@@ -1423,6 +1426,44 @@ async function idoPhotoAction(index, action) {
   if (data.error) { alert(data.error); return; }
   if (data.queued) startPolling();   // obrobka tego zdjecia w toku
   openIdoPlan(planOfferId);          // odswiez okno planu (nowy stan)
+}
+
+// "Dodaj zdjecie z dysku" w oknie planu: zapisz do extras -> dopnij do planu
+// jako process + dokolejkuj obrobke -> auto-refresh okna gdy gotowe
+let idoPlanReprocessTimer = null;
+$("idoPlanAddInput").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  e.target.value = "";
+  if (!f || !planOfferId || planSource !== "idosell") return;
+  const pid = planOfferId;
+  const fd = new FormData(); fd.append("file", f);
+  let add;
+  try { add = await (await api(`/api/idosell/products/${pid}/add-local`, { method: "POST", body: fd })).json(); }
+  catch { add = { error: "Błąd wysyłki" }; }
+  if (add.error) { alert(add.error); return; }
+  const fd2 = optionsForm(new FormData()); fd2.append("extra", add.extra);
+  let res;
+  try { res = await (await api(`/api/idosell/products/${pid}/plan-add`, { method: "POST", body: fd2 })).json(); }
+  catch { res = { error: "Błąd połączenia" }; }
+  if (res.error) { alert(res.error); return; }
+  openIdoPlan(pid); startPolling(); watchIdoPlanReprocess(pid);
+});
+
+function watchIdoPlanReprocess(pid) {
+  if (idoPlanReprocessTimer) clearInterval(idoPlanReprocessTimer);
+  let seenBusy = false;
+  idoPlanReprocessTimer = setInterval(() => {
+    if ($("planOverlay").classList.contains("hidden") || planOfferId !== pid) {
+      clearInterval(idoPlanReprocessTimer); idoPlanReprocessTimer = null; return;
+    }
+    const busy = lastJobs.some(j => (j.name || "").startsWith(`${pid}_`) &&
+      (j.status === "queued" || j.status === "processing"));
+    if (busy) { seenBusy = true; return; }
+    if (seenBusy) {                  // bylo w toku, teraz gotowe -> odswiez raz
+      clearInterval(idoPlanReprocessTimer); idoPlanReprocessTimer = null;
+      openIdoPlan(pid);
+    }
+  }, 1500);
 }
 
 async function rollbackIdoPlan() {
@@ -1573,6 +1614,7 @@ async function rollbackPlan() {
 }
 
 // ---------- IdoSell: multi-select + obróbka wsadowa ----------
+const IDO_PANEL = "https://bosastopka.pl/panel/app/product-edit.php?idt=";
 const selectedIdo = new Set();
 function toggleIdo(id, on) {
   if (on) selectedIdo.add(String(id)); else selectedIdo.delete(String(id));
@@ -1841,7 +1883,7 @@ async function loadIdoProducts(reset) {
       <div class="card-body">
         <span class="card-name">${esc(p.name || "(bez nazwy)")}</span>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <span class="badge">ID: ${esc(p.id)}</span>
+          <a class="badge" href="${IDO_PANEL}${esc(p.id)}" target="_blank" rel="noopener" style="color:var(--accent2);text-decoration:none" title="Otwórz w panelu IdoSell">ID: ${esc(p.id)} ↗</a>
           ${p.code ? `<span class="badge">kod: ${esc(p.code)}</span>` : ""}
           <span class="badge">zdjęć: ${p.images_count ?? "-"}</span>
           ${p.archived_tag ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">🏷 tag Archiwum</span>` : ""}

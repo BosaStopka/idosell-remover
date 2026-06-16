@@ -38,6 +38,8 @@ ORIGINALS_DIR = BASE / "originals"
 ORIGINALS_DIR.mkdir(exist_ok=True)
 MASKS_DIR = BASE / "masks"
 MASKS_DIR.mkdir(exist_ok=True)
+EXTRAS_DIR = BASE / "extras"   # lokalne zdjecia dodane do produktow z dysku
+EXTRAS_DIR.mkdir(exist_ok=True)
 APP_CONFIG_FILE = BASE / "app_config.json"
 JOBS_STATE_FILE = BASE / "jobs_state.json"
 
@@ -1743,13 +1745,68 @@ def idosell_photo_action(product_id):
     queued = False
     if action == "process":   # dokolejkuj obrobke tego jednego zdjecia
         try:
-            data = idosell_client.download_image(dec["url"])
-        except idosell_client.IdoSellError as e:
+            if dec.get("extra"):   # zdjecie dodane z dysku
+                data = (EXTRAS_DIR / dec["extra"]).read_bytes()
+            else:
+                data = idosell_client.download_image(dec["url"])
+        except (idosell_client.IdoSellError, OSError) as e:
             return jsonify({"error": f"Pobranie zdjecia: {e}"}), 400
         job_opts = {**options, "mirror": bool(dec.get("mirror"))}
         submit_job(f"{product_id}_{idx}.jpg", data, job_opts, source="idosell")
         queued = True
     return jsonify({"ok": True, "action": action, "queued": queued})
+
+
+@app.post("/api/idosell/products/<int:product_id>/add-local")
+def idosell_add_local(product_id):
+    """Zapisuje zdjecie z dysku do extras/ - do dolaczenia do planu."""
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "Brak pliku"}), 400
+    data = f.read()
+    ext = Path(f.filename or "img.jpg").suffix or ".jpg"
+    fname = f"{product_id}_{uuid.uuid4().hex[:8]}{ext}"
+    try:
+        (EXTRAS_DIR / fname).write_bytes(data)
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"extra": fname, "name": f.filename})
+
+
+@app.get("/extras/<path:relpath>")
+def serve_extra(relpath):
+    return send_from_directory(EXTRAS_DIR, relpath)
+
+
+@app.post("/api/idosell/products/<int:product_id>/plan-add")
+def idosell_plan_add(product_id):
+    """Dodaje zdjecie z dysku (zapisane przez /add-local) do ISTNIEJACEGO
+    planu jako 'process' + dokolejkowuje obrobke - bez przerabiania calego
+    produktu. Po obrobce wyslij produkt ponownie (nadpisze galeria)."""
+    options = parse_options(request.form)
+    extra = request.form.get("extra")
+    if not extra or not (EXTRAS_DIR / extra).exists():
+        return jsonify({"error": "Brak pliku (extra)"}), 400
+    pf = DONE_DIR / str(product_id) / "plan.json"
+    if not pf.exists():
+        return jsonify({"error": "Brak planu dla tego produktu"}), 404
+    plan = json.loads(pf.read_text(encoding="utf-8"))
+    decs = plan.get("decisions", [])
+    # wysoki index (>=901) dla zdjec z dysku - nie koliduje ze slotami galerii
+    new_idx = max([900] + [d.get("index", 0) for d in decs]) + 1
+    decs.append({"index": new_idx, "image_id": None, "slot": None,
+                 "url": None, "action": "process", "mirror": False,
+                 "icons": [], "extra": extra})
+    plan["decisions"] = decs
+    pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
+                  encoding="utf-8")
+    try:
+        data = (EXTRAS_DIR / extra).read_bytes()
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    submit_job(f"{product_id}_{new_idx}.jpg", data,
+               {**options, "mirror": False}, source="idosell")
+    return jsonify({"ok": True, "index": new_idx})
 
 
 # ------------- IdoSell FAZA 2: wykonanie planu (zapis do sklepu) -------------
@@ -1868,7 +1925,7 @@ def build_ido_plan_preview(product_id: int) -> dict:
     for d in plan["decisions"]:
         item = {"index": d["index"], "action": d["action"], "url": d["url"],
                 "image_id": d.get("image_id"), "slot": d.get("slot"),
-                "icons": d.get("icons") or []}
+                "icons": d.get("icons") or [], "extra": d.get("extra")}
         if d["action"] == "process":
             rel = f"{product_id}/{product_id}_{d['index']}.jpg"
             path = DONE_DIR / rel
