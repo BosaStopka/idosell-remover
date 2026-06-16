@@ -158,6 +158,43 @@ Niespójność to nie tylko tło. Przykład **całej linii Xero**: zdjęcia są
 
 ---
 
+## 4b. Kierunek/profil produktu (spójność "patrzenia")
+
+Best practice: **zdjęcie GŁÓWNE (pierwsze) - jeden profil boczny, ten sam
+kierunek w całym katalogu** (np. wszystkie noskiem w tę samą stronę). To
+duży zysk spójności w siatce. **Galeria (zdjęcia 2-N) - różnicujemy**: góra,
+podeszwa, tył, 3/4, para, lifestyle.
+
+Narzędzie: **mirror (⇄)** w oknie wyboru zdjęć - odbija zdjęcie, żeby
+ustawić wybrany kierunek.
+
+**Haczyk - logo/napisy:** mirror odwraca też napisy i logo na bucie. Zasada:
+- but bez logo z boku / logo obustronne → odbijaj śmiało,
+- but z logo tylko z jednej strony → **nie odbijać** (logo wyszłoby lustrzane);
+  zostaw naturalny kierunek albo dostarcz zdjęcie z właściwej strony.
+
+Wskazówka praktyczna: ustal kierunek wg **większości** dzisiejszych zdjęć
+głównych (mniej odbić = mniej ryzyka z logo).
+
+## 4c. Co mówią aktualne trendy (2024-2026)
+- **Białe tło = standard nr 1** dla zdjęcia głównego (karta + siatka);
+  marketplace tego wymagają/preferują.
+- **Rygorystyczna spójność** (jedno tło + kwadrat 1:1 + ta sama skala + kąt)
+  robi wrażenie "premium" - to ona, nie różnorodność na głównym.
+- **Przezroczyste PNG** modne na stronach marki, nie do feedów marketplace.
+- **Subtelny cień** daje głębię (vs płasko).
+- **Lifestyle** = mocny trend, ale jako zdjęcia WTÓRNE po czystym głównym.
+
+Rekomendacja spójna: **białe + kwadrat + subtelny cień + lifestyle jako
+uzupełnienie** - obsługuje sklep i Allegro jednym plikiem.
+
+## 4d. Materiał poglądowy (próbka porównawcza)
+Wygenerowane: `samples/compare/compare_<id>_<slot>.jpg` - ten sam produkt
+(Xero, oryginał landscape) obok wariantów docelowych: kwadrat białe+cień /
+białe bez cienia / szare 242 / przezroczyste. Pokazuje na żywo różnicę
+skali (oryginał: but mały i nisko → docelowo: duży, wyśrodkowany, ~90%).
+Narzędzie: `experiments/compare_standard.py <productId> [slot]`.
+
 ## 5. Zakres masowej obróbki
 - **Wszystko** → 100% spójność (przerabiamy też już-białe pod jeden standard
   rozmiaru/cienia). Więcej zapisów, ale katalog idealnie równy.
