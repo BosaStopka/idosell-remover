@@ -176,6 +176,31 @@ ustawić wybrany kierunek.
 Wskazówka praktyczna: ustal kierunek wg **większości** dzisiejszych zdjęć
 głównych (mniej odbić = mniej ryzyka z logo).
 
+## 4b2. Jakie UJĘCIE głównego zdjęcia: profil / 3-4 / para
+
+Trzy opcje (porównanie: `samples/compare/compare_angle.jpg`):
+- **Profil boczny (1 but)** - najczystszy, pokazuje sylwetkę barefoot
+  (cienka podeszwa, zero-drop), logo z boku, najłatwiejszy do jednego
+  kierunku (mirror). Słabszy dla WZORÓW (dino, serca) i szerokiego noska.
+- **3/4 kąt (1 but)** - pokazuje więcej (góra+nosek+bok), lepszy dla wzorów
+  i szerokiego noska; cieplejszy. **Sklep już ma te ujęcia** (zero kosztu).
+- **Para (2 buty 3/4)** - najbardziej premium, najlepszy dla wzorów, ALE
+  wymaga zdjęć pary od dostawcy (sklep ma dziś głównie pojedyncze!),
+  trudniej trzymać równą skalę w siatce.
+
+**Rekomendacja (kids + dużo wzorów + barefoot):** główne = jednolicie
+**3/4 kąt** (pokazuje wzór i nosek, już dostępne, łatwe do spójności);
+profil + podeszwa + lifestyle do galerii. **Para** tylko jeśli pozyskacie
+zdjęcia pary dla CAŁEGO asortymentu - inaczej miks pojedynczy/para rozjeżdża
+skalę. **Zasada:** główne ujęcie jednolite w całym katalogu.
+
+> Uwaga praktyczna: w sklepie Ameko (i podobne) mają dziś sloty: 3/4, profil,
+> podeszwa - **bez pary**. "Para jako standard" = inwestycja w nowe zdjęcia.
+
+> Uwaga: "szare pudełka" białych zdjęć na karcie NIE są problemem - karta ma
+> wycieniowanie z bielą, białe zdjęcia się wtapiają (potwierdzone z właścicielem).
+> Czyli białe tło bez zmiany szablonu.
+
 ## 4c. Co mówią aktualne trendy (2024-2026)
 - **Białe tło = standard nr 1** dla zdjęcia głównego (karta + siatka);
   marketplace tego wymagają/preferują.
