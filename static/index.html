@@ -1304,6 +1304,11 @@ async function openIdoPlan(productId) {
       </div>
       <div style="padding:8px;text-align:center;font-size:12px;color:${color}">
         ${it.index}. ${lbl}${it.action === "process" && !it.local ? " (czeka na obróbkę)" : ""}
+      </div>
+      <div class="seg">
+        <button class="process ${it.action === "process" ? "on" : ""}" onclick="idoPhotoAction(${it.index}, 'process')" title="Wytnij tło (dokolejkuje tylko to zdjęcie)">Obrób</button>
+        <button class="keep ${it.action === "keep" ? "on" : ""}" onclick="idoPhotoAction(${it.index}, 'keep')">Zostaw</button>
+        <button class="delete ${it.action === "delete" ? "on" : ""}" onclick="idoPhotoAction(${it.index}, 'delete')">Usuń</button>
       </div></div>`;
   }
   html += `</div>`;
@@ -1402,6 +1407,22 @@ async function executeIdoPlan() {
     <p style="font-size:12.5px;color:var(--muted);margin-top:4px">Backup stanu sprzed zapisu: originals/idosell/${esc(planOfferId)}/ · dziennik: idosell_audit.jsonl</p>
     <button class="btn btn-ghost" style="margin-top:14px" onclick="rollbackIdoPlan()">↩ Przywróć poprzednią galerię (rollback)</button>`;
   loadIdoProducts(true);
+}
+
+// zmiana akcji pojedynczego zdjecia w planie IdoSell (np. zle sklasyfikowane
+// jako "fashion" -> Obrob) bez przerabiania calego produktu; potem wyslij ponownie
+async function idoPhotoAction(index, action) {
+  const fd = optionsForm(new FormData());
+  fd.append("index", index);
+  fd.append("action", action);
+  let data;
+  try {
+    const res = await api(`/api/idosell/products/${planOfferId}/photo-action`, { method: "POST", body: fd });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); return; }
+  if (data.queued) startPolling();   // obrobka tego zdjecia w toku
+  openIdoPlan(planOfferId);          // odswiez okno planu (nowy stan)
 }
 
 async function rollbackIdoPlan() {

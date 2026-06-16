@@ -1717,6 +1717,41 @@ def idosell_bulk_process():
                     "failed": len(results) - ok, "total_jobs": total_jobs})
 
 
+@app.post("/api/idosell/products/<int:product_id>/photo-action")
+def idosell_photo_action(product_id):
+    """Zmiana akcji JEDNEGO zdjecia w istniejacym planie (process/keep/delete)
+    po obrobce - bez przerabiania calego produktu. 'process' dokolejkowuje
+    obrobke tylko tego zdjecia. Po zmianie wyslij produkt ponownie (nadpisze)."""
+    options = parse_options(request.form)
+    idx = request.form.get("index", type=int)
+    action = request.form.get("action")
+    if action not in ("process", "keep", "delete"):
+        return jsonify({"error": "Nieprawidlowa akcja"}), 400
+    pf = DONE_DIR / str(product_id) / "plan.json"
+    if not pf.exists():
+        return jsonify({"error": "Brak planu dla tego produktu"}), 404
+    plan = json.loads(pf.read_text(encoding="utf-8"))
+    dec = next((d for d in plan.get("decisions", [])
+                if d.get("index") == idx), None)
+    if dec is None:
+        return jsonify({"error": "Nie ma takiego zdjecia w planie"}), 404
+    dec["action"] = action
+    if action == "delete":
+        dec["icons"] = []   # usuniete zdjecie nie moze byc ikona
+    pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
+                  encoding="utf-8")
+    queued = False
+    if action == "process":   # dokolejkuj obrobke tego jednego zdjecia
+        try:
+            data = idosell_client.download_image(dec["url"])
+        except idosell_client.IdoSellError as e:
+            return jsonify({"error": f"Pobranie zdjecia: {e}"}), 400
+        job_opts = {**options, "mirror": bool(dec.get("mirror"))}
+        submit_job(f"{product_id}_{idx}.jpg", data, job_opts, source="idosell")
+        queued = True
+    return jsonify({"ok": True, "action": action, "queued": queued})
+
+
 # ------------- IdoSell FAZA 2: wykonanie planu (zapis do sklepu) -------------
 
 IDO_AUDIT_FILE = BASE / "idosell_audit.jsonl"
