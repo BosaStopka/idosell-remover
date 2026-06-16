@@ -1576,16 +1576,21 @@ def idosell_product_images(product_id):
         images = idosell_client.get_product_images(product_id)
     except idosell_client.IdoSellError as e:
         return jsonify({"error": str(e)}), 400
-    suggestions = []
-    for img in images:
-        suggest = "process"
+
+    # ROWNOLEGLE pobranie miniatur (~6 watkow) - sekwencyjnie 6-7 zdjec x
+    # CDN = kilka sekund, pick-flow "Obrob zdjecia" wisial.
+    def _suggest(img):
         try:
             thumb = idosell_client.download_image(img["thumb"])
             if analyze_thumb(thumb)["white"] < 0.40:
-                suggest = "keep"
+                return "keep"  # kolorowe tlo (stylizacja) -> zostaw
         except Exception:
             pass
-        suggestions.append(suggest)
+        return "process"
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        suggestions = list(ex.map(_suggest, images))  # zachowuje kolejnosc
     return jsonify({"images": images, "suggestions": suggestions})
 
 

@@ -1116,7 +1116,8 @@ function renderPick() {
   $("pickTitle").textContent = `${kind} ${pickState.offerId} - ${pickState.items.length} zdjęć${batchInfo}`;
   $("pickGrid").innerHTML = pickState.items.map((it, i) => `
     <div class="pick act-${it.action}">
-      <div class="thumb"><img src="${esc(it.url)}" loading="lazy">
+      <div class="thumb"><img src="${esc(it.preview || it.url)}" loading="lazy" decoding="async"
+        style="${it.mirror ? "transform:scaleX(-1)" : ""}">
         ${i === 0 ? `<span class="main-tag">★ miniaturka</span>` : ""}
         ${it.suggested ? `<span class="fashion-tag">fashion?</span>` : ""}
       </div>
@@ -1237,7 +1238,7 @@ async function openPlan(offerId) {
     const src = it.action === "process"
       ? (it.local ? `/done/${it.local}` : null) : it.url;
     html += `<div class="pick" style="border-color:${color}">
-      <div class="thumb">${src ? `<img src="${esc(src)}" loading="lazy">` : `<div class="spin"></div>`}</div>
+      <div class="thumb">${src ? `<img src="${esc(src)}" loading="lazy" decoding="async">` : `<div class="spin"></div>`}</div>
       <div style="padding:8px;text-align:center;font-size:12px;color:${color}">
         ${it.index}. ${lbl}${it.action === "process" && !it.local ? " (czeka na obróbkę)" : ""}
       </div></div>`;
@@ -1298,7 +1299,7 @@ async function openIdoPlan(productId) {
       ? (it.local ? `/done/${it.local}` : null) : it.url;
     const icons = (it.icons || []).map(t => IC[t]).join(" + ");
     html += `<div class="pick" style="border-color:${color}">
-      <div class="thumb">${src ? `<img src="${esc(src)}" loading="lazy">` : `<div class="spin"></div>`}
+      <div class="thumb">${src ? `<img src="${esc(src)}" loading="lazy" decoding="async">` : `<div class="spin"></div>`}
         ${icons ? `<span class="main-tag">📌 ${icons}</span>` : ""}
       </div>
       <div style="padding:8px;text-align:center;font-size:12px;color:${color}">
@@ -1812,7 +1813,7 @@ async function loadIdoProducts(reset) {
   for (const p of data.products) {
     const checked = selectedIdo.has(String(p.id)) ? "checked" : "";
     html += `<div class="card">
-      <div class="thumb white">${p.image ? `<img src="${esc(p.image)}">` : `<span style="font-size:26px">🖼</span>`}
+      <div class="thumb white">${p.image ? `<img src="${esc(p.image)}" loading="lazy" decoding="async">` : `<span style="font-size:26px">🖼</span>`}
         <input type="checkbox" class="offer-check" data-id="${esc(p.id)}" ${checked}
           onchange="toggleIdo('${esc(p.id)}', this.checked)">
       </div>
@@ -1856,6 +1857,7 @@ async function processIdoProduct(id, btn) {
     source: "idosell",
     items: data.images.map((im, i) => ({
       url: im.url,
+      preview: im.medium || im.thumb || im.url,   // lzejszy podglad w siatce
       image_id: im.id,
       slot: im.slot,
       action: (data.suggestions || [])[i] || "process",

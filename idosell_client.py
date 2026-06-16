@@ -136,6 +136,7 @@ def _image_row(img: dict) -> dict:
         "slot": slot,
         "priority": img.get("productImagePriority"),
         "url": img.get("productImageLargeUrl"),
+        "medium": img.get("productImageMediumUrl"),   # podglad (lzejszy niz large)
         "thumb": img.get("productImageSmallUrl"),
         "width": img.get("productImageWidth"),
         "height": img.get("productImageHeight"),
