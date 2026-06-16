@@ -626,7 +626,16 @@ def analyze_thumb(data: bytes) -> dict:
 
     import numpy as np
     from PIL import Image
-    arr = np.asarray(Image.open(BytesIO(data)).convert("RGB"))
+    img = Image.open(BytesIO(data))
+    # przezroczyste PNG (produkt juz wyciety, np. Be Lenka) -> kompozycja na
+    # biel, inaczej convert("RGB") robi z przezroczystosci CZERN i kazde
+    # takie zdjecie ladowalo jako "fashion" (white naroznikow = 0)
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        bg.alpha_composite(img)
+        img = bg
+    arr = np.asarray(img.convert("RGB"))
     h, w = arr.shape[:2]
     mh, mw = max(2, int(h * 0.12)), max(2, int(w * 0.12))
     patches = [arr[:mh, :mw], arr[:mh, -mw:], arr[-mh:, :mw], arr[-mh:, -mw:]]

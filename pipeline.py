@@ -319,7 +319,16 @@ def process_bytes(data: bytes, opt: dict, with_parts: bool = False):
     from rembg import remove
 
     options = {**DEFAULTS, **opt}
-    src = Image.open(BytesIO(data)).convert("RGB")
+    _src = Image.open(BytesIO(data))
+    if _src.mode in ("RGBA", "LA", "P"):
+        # przezroczyste PNG (produkt juz wyciety) -> kompozycja na biel,
+        # inaczej convert("RGB") da CZARNE tlo i model/cien zglupieja
+        _src = _src.convert("RGBA")
+        _bg = Image.new("RGBA", _src.size, (255, 255, 255, 255))
+        _bg.alpha_composite(_src)
+        src = _bg.convert("RGB")
+    else:
+        src = _src.convert("RGB")
     if options.get("mirror"):
         src = ImageOps.mirror(src)  # odbicie - standaryzacja kierunku noska
     if max(src.size) < AI_UPSCALE_BELOW:
