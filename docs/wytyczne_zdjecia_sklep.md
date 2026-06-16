@@ -58,6 +58,35 @@ Dwa dodatkowe wnioski z przeglądu:
 
 ---
 
+## 2b. Druga warstwa problemu: PROPORCJA (kwadrat vs prostokąt)
+
+Niespójność to nie tylko tło. Przykład **całej linii Xero**: zdjęcia są
+**białe**, ale w proporcji **landscape ~1.54:1** (np. 1540×1000, 675×438) -
+**NIE kwadrat**. To gryzie nawet przy białym tle:
+
+- Siatka produktów i miniaturki w sklepie to **kwadratowe kontenery**.
+- Landscape w kwadratowym slocie → sklep **dokłada pasy** (but mały, luki
+  góra/dół) albo **przycina** (ucina kawałki).
+- Efekt: na sąsiednich kafelkach buty mają **różną skalę** - kwadrat (Evacare)
+  wypełnia kafelek, landscape (Xero) siedzi mały z lukami. Wygląda
+  przypadkowo, mimo że oba białe.
+
+**Wniosek:** standaryzujemy DWIE rzeczy naraz - tło ORAZ proporcję/skalę.
+
+### Specyfikacja techniczna docelowego zdjęcia
+- **Kadr: kwadrat 1:1, 1600×1600 px** (każde zdjęcie identyczny kontener).
+- **Produkt: wyśrodkowany, wypełnia ~88-90%** szerokości/wysokości - dzięki
+  temu na każdym kafelku but ma **tę samą skalę**.
+- **Tło:** wg decyzji z pkt 3 (rekomendacja: białe).
+- **Format:** JPG jakość 95 (małe pliki) - chyba że wybierzemy przezroczyste
+  (wtedy PNG).
+- **Cień:** wg decyzji z pkt 4.
+- Pipeline robi to automatycznie: przycina do produktu → kwadrat 1600 →
+  skala ~90%. Po przerobieniu Xero/Evacare/Be Lenka = ten sam kwadrat, ta
+  sama skala, to samo tło → siatka jak jeden spójny katalog.
+
+---
+
 ## 3. Decyzja główna: jakie TŁO
 
 ### A) Czyste białe (#FFFFFF) - REKOMENDOWANE
