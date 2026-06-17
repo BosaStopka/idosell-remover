@@ -165,7 +165,11 @@ def submit_job(name: str, data: bytes, options: dict, source: str = "upload") ->
     with lock:
         jobs[job_id] = {
             "id": job_id, "name": name, "status": "queued",
-            "data": data, "options": options, "result": None,
+            # nie trzymaj bajtow w RAM gdy oryginal jest na dysku - worker
+            # doczyta z orig na biezaco; w pamieci tylko gdy zapis sie nie udal.
+            # Inaczej cala zakolejkowana paczka (hurt) siedzialaby naraz w RAM.
+            "data": data if orig_file is None else None,
+            "options": options, "result": None,
             "error": None, "source": source, "orig": orig_file,
         }
         job_order.append(job_id)
@@ -273,6 +277,8 @@ def worker():
         finally:
             if queue.empty():
                 inference_busy.clear()  # kolejka pusta - skan moze wrocic
+            import gc
+            gc.collect()  # zwolnij bufory numpy/ort po zadaniu - RAM nisko
         persist_jobs()
 
 
