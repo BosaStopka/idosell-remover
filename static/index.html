@@ -515,6 +515,7 @@
         <button class="btn btn-ghost" id="idoSelectAll" title="Zaznacz wszystkie widoczne produkty (np. cała seria/model po wyszukaniu)">☑ Zaznacz widoczne</button>
         <button class="btn btn-primary hidden" id="idoBatchBtn" title="Otwiera wybór zdjęć PO KOLEI dla każdego - decydujesz co obrobić/zostawić/usunąć">🪄 Obrób zaznaczone</button>
         <button class="btn btn-ghost hidden" id="idoBatchAllBtn" title="Obrób WSZYSTKIE zdjęcia zaznaczonych bez okna wyboru (szybko, do dużych paczek)">⚡ bez wyboru</button>
+        <button class="btn btn-ghost hidden" id="idoSendBtn" title="Wyślij do IdoSell tylko zaznaczone obrobione produkty (z potwierdzeniem; nieobrobione zgłoszą błąd)">📤 Wyślij zaznaczone</button>
         <button class="btn btn-ghost hidden" id="idoRollbackBtn" style="color:var(--err);border-color:var(--err)" title="Przywróć zaznaczone produkty z backupu na dysku (cofa wysyłkę - działa kiedykolwiek)">↩ Cofnij zaznaczone</button>
         <label style="font-size:13px;color:var(--muted);display:flex;align-items:center;gap:5px" title="Ukryj produkty, które mają już lokalne wyniki (obrobione/wysłane)">
           <input type="checkbox" id="idoHideDone" style="accent-color:var(--accent)"> ukryj obrobione</label>
@@ -1751,11 +1752,52 @@ function toggleIdo(id, on) {
   const ab = $("idoBatchAllBtn");
   ab.classList.toggle("hidden", !selectedIdo.size);
   ab.textContent = `⚡ bez wyboru (${selectedIdo.size})`;
+  const sb = $("idoSendBtn");
+  sb.classList.toggle("hidden", !selectedIdo.size);
+  sb.textContent = `📤 Wyślij zaznaczone (${selectedIdo.size})`;
   const rb = $("idoRollbackBtn");
   rb.classList.toggle("hidden", !selectedIdo.size);
   rb.textContent = `↩ Cofnij zaznaczone (${selectedIdo.size})`;
 }
 $("idoRollbackBtn").addEventListener("click", () => bulkRollback([...selectedIdo]));
+$("idoSendBtn").addEventListener("click", () => sendSelected([...selectedIdo]));
+// wysylka tylko ZAZNACZONYCH (spojnie z 'Obrob/Cofnij zaznaczone') - ten sam
+// modal i handler co 'Wyslij wsadowo', tylko lista z biezacego zaznaczenia.
+// Nieobrobione/bez planu zglosza blad per produkt (nic im nie zrobi).
+function sendSelected(ids) {
+  if (!ids.length) return;
+  const ready = {};
+  for (const g of readyIdoGroups()) ready[g.pid] = g;
+  $("bulkBody").innerHTML = `
+    <div class="allegro-note" style="border-color:var(--err)">
+      ⚠️ <b>Za chwilę nadpiszesz galerie w sklepie IdoSell dla zaznaczonych produktów.</b>
+      Każdy przechodzi pełny wzorzec: archiwum oryginałów (D:) → backup → PUT → weryfikacja GET → audyt.
+      Produkt bez gotowego planu zgłosi błąd (nic mu nie zrobi).
+    </div>
+    <div style="max-height:300px;overflow:auto;background:var(--panel2);border-radius:10px;padding:8px 12px;margin:12px 0">
+      ${ids.map(id => {
+        const m = idoMeta[id] || {}, g = ready[id];
+        return `<label style="display:flex;gap:10px;align-items:center;padding:5px 0;font-size:13px">
+          <input type="checkbox" class="bulk-check" value="${esc(id)}" ${g && g.flagged ? "" : "checked"} style="accent-color:var(--accent)">
+          <span style="min-width:90px;color:var(--accent2)">ID ${esc(id)}</span>
+          ${g ? `<span class="badge">${g.count} zdjęć</span>` : `<span class="badge" style="opacity:.7">wg planu na dysku</span>`}
+          ${g && g.flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ ${g.flagged} do przeglądu</span>` : (g ? `<span class="badge" style="color:var(--ok)">✓ QA OK</span>` : "")}
+          ${m.series_name ? `<span class="badge">📦 ${esc(m.series_name)}</span>` : ""}
+        </label>`;
+      }).join("")}
+    </div>
+    <label style="display:flex;gap:10px;align-items:center;margin:8px 0;font-size:13.5px">
+      <input type="checkbox" id="bulkConfirm" style="width:18px;height:18px;accent-color:var(--err)">
+      Rozumiem, że to zmieni galerie w sklepie (mam backup i rollback per produkt)
+    </label>`;
+  $("bulkSummary").textContent = `${ids.length} zaznaczonych`;
+  const bt = document.querySelector("#bulkOverlay h2");
+  if (bt) bt.textContent = "Wyślij zaznaczone do IdoSell";
+  $("bulkGo").classList.remove("hidden");
+  $("bulkGo").disabled = true; $("bulkGo").textContent = "📤 Wyślij zaznaczone do IdoSell";
+  $("bulkOverlay").classList.remove("hidden");
+  $("bulkConfirm").addEventListener("change", e => $("bulkGo").disabled = !e.target.checked);
+}
 $("idoBatchBtn").addEventListener("click", () => {
   const ids = [...selectedIdo];
   if (!ids.length) return;
