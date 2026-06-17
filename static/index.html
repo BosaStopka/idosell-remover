@@ -830,14 +830,46 @@ $("bulkGo").addEventListener("click", async () => {
     `<div style="font-size:12.5px;padding:3px 0;color:${r.ok ? (r.verified === false ? "#ff8a3d" : "var(--ok)") : "var(--err)"}">
       ID ${esc(r.id)}: ${r.ok ? (r.verified === false ? "⚠ wysłane, weryfikacja niezgodna" : `✓ wysłane (${r.final_count} zdjęć)`) : "✗ " + esc(r.error || "")}
     </div>`).join("");
+  const sentIds = (data.results || []).filter(r => r.ok).map(r => String(r.id));
   $("bulkBody").innerHTML = `<p style="color:var(--ok);font-size:15px">✅ Wysłano ${data.ok}/${data.ok + data.failed} produktów.</p>
     <div style="max-height:320px;overflow:auto;margin-top:10px">${rows}</div>
+    ${sentIds.length ? `<button class="btn btn-ghost" id="bulkUndo" style="margin-top:10px;border-color:var(--err);color:var(--err)">↩ Cofnij wszystkie wysłane (${sentIds.length})</button>` : ""}
     <p style="font-size:12.5px;color:var(--muted);margin-top:8px">Backup i rollback per produkt: originals/idosell/{ID}/ · oryginały: D:\\idosell_backup · dziennik: idosell_audit.jsonl</p>`;
   $("bulkGo").classList.add("hidden");
   $("bulkSummary").textContent = "";
+  const undoBtn = $("bulkUndo");
+  if (undoBtn) undoBtn.addEventListener("click", () => bulkRollback(sentIds, undoBtn));
   loadIdoProducts(true);
   lastJobsKey = ""; refresh();
 });
+
+// wsadowe cofniecie zapisu (bezpiecznik: szybki powrot do stanu sprzed wysylki)
+async function bulkRollback(ids, btn) {
+  if (!ids || !ids.length) return;
+  if (!confirm(`Cofnąć zapis dla ${ids.length} produktów? Galerie wrócą do stanu sprzed wysyłki (z backupu na dysku).`)) return;
+  if (btn) { btn.disabled = true; btn.textContent = `Cofanie ${ids.length}...`; }
+  let data;
+  try {
+    const res = await api("/api/idosell/bulk-rollback", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true, product_ids: ids }),
+    });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) {
+    alert(data.error);
+    if (btn) { btn.disabled = false; btn.textContent = `↩ Cofnij wszystkie wysłane (${ids.length})`; }
+    return;
+  }
+  const rows = (data.results || []).map(r =>
+    `<div style="font-size:12.5px;padding:3px 0;color:${r.ok ? (r.verified === false ? "#ff8a3d" : "var(--ok)") : "var(--err)"}">
+      ID ${esc(r.id)}: ${r.ok ? (r.verified === false ? "⚠ cofnięte, weryfikacja niezgodna" : `✓ cofnięte (${r.restored} zdjęć)`) : "✗ " + esc(r.error || "")}
+    </div>`).join("");
+  $("bulkBody").innerHTML = `<p style="color:var(--ok);font-size:15px">↩ Cofnięto ${data.ok}/${data.ok + data.failed} produktów.</p>
+    <div style="max-height:320px;overflow:auto;margin-top:10px">${rows}</div>`;
+  loadIdoProducts(true);
+  lastJobsKey = ""; refresh();
+}
 $("zipBtn").addEventListener("click", () => location.href = "/api/zip");
 $("clearBtn").addEventListener("click", async () => {
   await api("/api/clear", { method: "POST" }); refresh();

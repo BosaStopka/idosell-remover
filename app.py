@@ -2263,26 +2263,23 @@ def idosell_bulk_execute():
     return jsonify({"results": results, "ok": ok, "failed": len(results) - ok})
 
 
-@app.post("/api/idosell/products/<int:product_id>/rollback")
-def idosell_product_rollback(product_id):
-    """Przywraca galerie z fizycznego backupu na dysku."""
-    body = request.get_json(silent=True) or {}
-    if body.get("confirm") is not True:
-        return jsonify({"error": "Brak potwierdzenia"}), 400
+def _ido_rollback_one(product_id: int) -> dict:
+    """Rdzen przywrocenia galerii z fizycznego backupu na dysku dla jednego
+    produktu (zdjecia + ikony, weryfikacja GET-em). Zwraca dict wyniku albo
+    rzuca IdoExecError(msg, status). Wspolny dla rollback i bulk-rollback."""
     try:
         plan = load_ido_plan(product_id)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 404
+        raise IdoExecError(str(e), 404)
     backup = plan.get("backup_images")
     if not backup:
-        return jsonify({"error": "Brak backupu - plan nie byl wykonany"}), 409
+        raise IdoExecError("Brak backupu - plan nie byl wykonany", 409)
     try:
         images_b64 = []
         for entry in backup:
             path = ORIGINALS_DIR / entry["file"]
             if not path.exists():
-                return jsonify({"error":
-                    f"Brak pliku backupu {entry['file']}"}), 409
+                raise IdoExecError(f"Brak pliku backupu {entry['file']}", 409)
             images_b64.append(base64.b64encode(path.read_bytes()).decode())
 
         # ikony: byly -> przywroc z backupu; nie bylo -> skasuj nasza
@@ -2295,8 +2292,8 @@ def idosell_product_rollback(product_id):
             if entry["existed"] and entry.get("file"):
                 path = ORIGINALS_DIR / entry["file"]
                 if not path.exists():
-                    return jsonify({"error":
-                        f"Brak pliku backupu ikony {entry['file']}"}), 409
+                    raise IdoExecError(
+                        f"Brak pliku backupu ikony {entry['file']}", 409)
                 icons_restore[entry["type"]] = \
                     base64.b64encode(path.read_bytes()).decode()
             elif not entry["existed"]:
@@ -2324,13 +2321,55 @@ def idosell_product_rollback(product_id):
                                     expected_icons=sorted(icons_restore))
     except idosell_client.IdoSellError as e:
         ido_audit("rollback_error", product_id, {"error": str(e)})
-        return jsonify({"error": str(e)}), 502
+        raise IdoExecError(str(e), 502)
     plan["rolled_back_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     plan["verified"] = verify
     save_ido_plan(product_id, plan)
     ido_audit("rollback", product_id,
               {"restored_count": restored, "verified": verify})
-    return jsonify({"ok": True, "restored": restored, "verify": verify})
+    return {"ok": True, "restored": restored, "verify": verify}
+
+
+@app.post("/api/idosell/products/<int:product_id>/rollback")
+def idosell_product_rollback(product_id):
+    """Przywraca galerie z fizycznego backupu na dysku - wymaga confirm."""
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"error": "Brak potwierdzenia"}), 400
+    try:
+        return jsonify(_ido_rollback_one(product_id))
+    except IdoExecError as e:
+        return jsonify({"error": str(e)}), e.status
+
+
+@app.post("/api/idosell/bulk-rollback")
+def idosell_bulk_rollback():
+    """Wsadowe cofniecie zapisu wielu produktow - jedno potwierdzenie obejmuje
+    cala liste, ale KAZDY produkt cofa sie pelnym wzorcem (backup z dysku,
+    PUT, weryfikacja GET, audyt). Wynik per produkt - bezpiecznik przy
+    masowej wysylce, gdy trzeba szybko wrocic do stanu sprzed."""
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"error": "Brak potwierdzenia"}), 400
+    try:
+        ids = [int(x) for x in (body.get("product_ids") or [])]
+    except (TypeError, ValueError):
+        return jsonify({"error": "Nieprawidlowa lista produktow"}), 400
+    if not ids:
+        return jsonify({"error": "Pusta lista produktow"}), 400
+    results = []
+    for pid in ids:
+        try:
+            r = _ido_rollback_one(pid)
+            v = r.get("verify") or {}
+            results.append({"id": pid, "ok": True, "verified": v.get("ok"),
+                            "restored": r.get("restored")})
+        except IdoExecError as e:
+            results.append({"id": pid, "ok": False, "error": str(e)})
+        except Exception as e:  # noqa: BLE001 - jeden produkt nie wywala calosci
+            results.append({"id": pid, "ok": False, "error": str(e)})
+    ok = sum(1 for r in results if r["ok"])
+    return jsonify({"results": results, "ok": ok, "failed": len(results) - ok})
 
 
 class QuietPollingFilter(logging.Filter):
