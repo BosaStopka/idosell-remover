@@ -25,6 +25,11 @@ CONFIG_FILE = BASE / "idosell_config.json"
 
 DEFAULT_BASE_URL = "https://www.bosastopka.pl/api/admin/v8"
 DEFAULT_ARCHIVE_TAG_VALUE_ID = 2386
+# parametry produktu uzywane do kategorii i sezonu (ID z panelu IdoSell)
+CATEGORY_PARAM = 88   # "Rodzaj" - typ obuwia (kategoria w UI)
+SEASON_PARAM = 38     # "Pora roku" - sezon
+SEASON_VALUES = {"wiosna": 39, "lato": 74, "jesien": 40, "zima": 98}
+WINTER_TYPE_VALUE = 99  # Rodzaj = "buty zimowe" (drugi sygnal zimy obok zima 98)
 TIMEOUT = 30
 MIN_INTERVAL = 0.5   # throttling: minimalny odstep miedzy zadaniami [s]
 MAX_RETRIES = 5      # liczba prob przy 429
@@ -57,6 +62,46 @@ def is_configured() -> bool:
 def archive_tag_value_id() -> int:
     cfg = load_config() or {}
     return int(cfg.get("archive_tag_value_id", DEFAULT_ARCHIVE_TAG_VALUE_ID))
+
+
+def _season_filter_ids(season: str | None):
+    """(enabled, disabled) value-id wg wyboru sezonu z UI:
+    '' / None  -> brak filtra
+    'wiosna'|'lato'|'jesien'|'zima' -> pokaz TYLKO ten sezon (enabled)
+    'bez-zimy' -> wyklucz zimowe (Pora roku=zima 98 + Rodzaj=buty zimowe 99)."""
+    if not season:
+        return None, None
+    if season == "bez-zimy":
+        return None, [SEASON_VALUES["zima"], WINTER_TYPE_VALUE]
+    vid = SEASON_VALUES.get(season)
+    return ([vid] if vid else None), None
+
+
+def _param_filter(enabled=None, disabled=None) -> list:
+    """Blok productParametersParams: ZAWSZE wyklucza tag Archiwum, plus
+    opcjonalne enabled/disabled (np. sezon). Jeden wspolny filtr dla skanu,
+    przegladu i recznego wyszukiwania - zeby archiwum nigdzie nie wpadlo."""
+    ids = {"productParameterIdsDisabled":
+           [archive_tag_value_id()] + list(disabled or [])}
+    if enabled:
+        ids["productParameterIdsEnabled"] = list(enabled)
+    return [{"productParameterIds": ids}]
+
+
+def _product_attrs(prod: dict):
+    """(category, season) jako listy nazw PL z parametrow 'Rodzaj' i 'Pora roku'.
+    Puste, gdy returnElements nie zawieralo 'parameters'."""
+    cat, season = [], []
+    for par in prod.get("productParameters") or []:
+        pid = par.get("parameterId")
+        if pid not in (CATEGORY_PARAM, SEASON_PARAM):
+            continue
+        bucket = cat if pid == CATEGORY_PARAM else season
+        for v in par.get("parameterValues") or []:
+            for L in v.get("parameterValueDescriptionsLangData") or []:
+                if L.get("langId") == "pol" and L.get("parameterValueName"):
+                    bucket.append(L["parameterValueName"].strip())
+    return cat, season
 
 
 def _request(method: str, path: str, params, timeout: int = TIMEOUT) -> dict:
@@ -165,29 +210,34 @@ def _product_row(prod: dict, with_tags: bool = False) -> dict:
         (_image_row(i) for i in prod.get("productImages") or []),
         key=lambda r: (r["priority"] is None, r["priority"]),
     )
+    cat, season = _product_attrs(prod)
     row = {
         "id": prod.get("productId"),
         "code": prod.get("productDisplayedCode") or "",
         "name": _product_name(prod),
         "images": images,
         "images_count": prod.get("productImagesCount", len(images)),
+        "category": cat,     # parametr "Rodzaj" (puste gdy bez 'parameters')
+        "season": season,    # parametr "Pora roku"
     }
     if with_tags:
         row["archived_tag"] = _has_archive_tag(prod)
     return row
 
 
-def scan_page(page: int = 0, limit: int = 100, availability: str = None) -> dict:
+def scan_page(page: int = 0, limit: int = 100, availability: str = None,
+              season: str = None, with_attrs: bool = False) -> dict:
     """Jedna strona pelnego skanu: aktywne produkty bez tagu Archiwum.
-    availability: 'y' (dostepne) / 'n' (niedostepne) / None (wszystkie)."""
+    availability: 'y' (dostepne) / 'n' (niedostepne) / None (wszystkie).
+    season: filtr sezonu (patrz _season_filter_ids).
+    with_attrs: dolacz parametry (kategoria/sezon) - dla przegladu produktow;
+    skan tla zostawia False (lzejszy payload)."""
+    en, dis = _season_filter_ids(season)
+    elements = SCAN_RETURN_ELEMENTS + (["parameters"] if with_attrs else [])
     params = {
         "returnProducts": "active",
-        "returnElements": SCAN_RETURN_ELEMENTS,
-        "productParametersParams": [{
-            "productParameterIds": {
-                "productParameterIdsDisabled": [archive_tag_value_id()],
-            },
-        }],
+        "returnElements": elements,
+        "productParametersParams": _param_filter(en, dis),
         "resultsPage": page,
         "resultsLimit": limit,
     }
@@ -203,11 +253,15 @@ def scan_page(page: int = 0, limit: int = 100, availability: str = None) -> dict
 
 
 def _find_active(query: str, field: str, limit: int,
-                 availability: str = None) -> list[dict]:
-    """field: 'id' (productId) | 'code' (fragment kodu) | 'text' (nazwa/opis)."""
+                 availability: str = None, season: str = None) -> list[dict]:
+    """field: 'id' (productId) | 'code' (fragment kodu) | 'text' (nazwa/opis).
+    Wyklucza tag Archiwum (jak skan/przeglad) - inaczej reczne wyszukanie
+    zwracalo glownie archiwum, ktore wpadalo do obrobki."""
+    en, dis = _season_filter_ids(season)
     params = {
         "returnProducts": "active",
         "returnElements": SCAN_RETURN_ELEMENTS + ["parameters"],
+        "productParametersParams": _param_filter(en, dis),
         "resultsPage": 0,
         "resultsLimit": limit,
     }
@@ -257,10 +311,12 @@ def _find_deleted(query: str, limit: int) -> list[dict]:
             return matches
 
 
-def find_products(query: str, limit: int = 20, availability: str = None) -> dict:
-    """Reczne wyszukanie po ID, nazwie (marka/model) lub kodzie - bez filtra
-    tagu Archiwum; szuka w aktywnych, potem w usunietych (archiwum IdoSell).
-    Kazdy wiersz ma archived_tag oraz deleted. availability: 'y'/'n'/None."""
+def find_products(query: str, limit: int = 20, availability: str = None,
+                  season: str = None) -> dict:
+    """Reczne wyszukanie po ID, nazwie (marka/model) lub kodzie. Wyklucza tag
+    Archiwum (jak skan/przeglad - archiwum nie ma trafiac do obrobki); szuka
+    w aktywnych, w razie pustki w usunietych (archiwum IdoSell). Kazdy wiersz
+    ma archived_tag oraz deleted. availability: 'y'/'n'/None; season: filtr."""
     query = (query or "").strip()
     if not query:
         return {"total": 0, "products": []}
@@ -268,32 +324,30 @@ def find_products(query: str, limit: int = 20, availability: str = None) -> dict
     if query.isdigit():
         # liczba: najpierw ID, dopiero potem kod (containsCodePart "1"
         # zalewa wynikami czastkowych trafien)
-        rows = _find_active(query, "id", limit, availability)
+        rows = _find_active(query, "id", limit, availability, season)
         if not rows:
-            rows = _find_active(query, "code", limit, availability)
+            rows = _find_active(query, "code", limit, availability, season)
     else:
         # tekst: najpierw nazwa/opis (marka "Bobux"), potem fragment kodu
-        rows = _find_active(query, "text", limit, availability)
+        rows = _find_active(query, "text", limit, availability, season)
         if not rows:
-            rows = _find_active(query, "code", limit, availability)
-    if not rows and availability is None:
+            rows = _find_active(query, "code", limit, availability, season)
+    if not rows and availability is None and not season:
         rows = _find_deleted(query, limit)
     return {"total": len(rows), "products": rows}
 
 
 def search_active(field: str, query: str, page: int = 0, limit: int = 20,
-                  availability: str = None) -> dict:
+                  availability: str = None, season: str = None) -> dict:
     """Paginowane wyszukiwanie w aktywnych (bez tagu Archiwum) po nazwie/opisie
     (field='text', np. marka 'Bobux') lub fragmencie kodu (field='code').
+    season: filtr sezonu (patrz _season_filter_ids).
     Zwraca pelny total z API (nie cap) - do przegladania calej marki."""
+    en, dis = _season_filter_ids(season)
     params = {
         "returnProducts": "active",
         "returnElements": SCAN_RETURN_ELEMENTS + ["parameters"],
-        "productParametersParams": [{
-            "productParameterIds": {
-                "productParameterIdsDisabled": [archive_tag_value_id()],
-            },
-        }],
+        "productParametersParams": _param_filter(en, dis),
         "resultsPage": page,
         "resultsLimit": limit,
     }

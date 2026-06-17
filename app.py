@@ -1506,6 +1506,8 @@ def _ido_row_ui(p: dict) -> dict:
         "images_count": p.get("images_count"),
         "archived_tag": p.get("archived_tag", False),
         "deleted": p.get("deleted", False),
+        "category": p.get("category") or [],
+        "season": p.get("season") or [],
     }
 
 
@@ -1515,7 +1517,7 @@ def _ido_fetch_rows(ids: list) -> dict:
         return {}
     data = idosell_client.search_products({
         "returnProducts": "active",
-        "returnElements": idosell_client.SCAN_RETURN_ELEMENTS,
+        "returnElements": idosell_client.SCAN_RETURN_ELEMENTS + ["parameters"],
         "productParams": [{"productId": int(i)} for i in ids],
         "resultsPage": 0, "resultsLimit": max(100, len(ids)),
     })
@@ -1592,6 +1594,7 @@ def idosell_products():
     avail = request.args.get("avail")  # 'y' / 'n' / None
     if avail not in ("y", "n"):
         avail = None
+    season = request.args.get("season", "").strip() or None  # filtr sezonu
     desc = sort == "id_desc"
     try:
         if view == "mine":
@@ -1612,7 +1615,8 @@ def idosell_products():
 
         if query and query.isdigit():
             # ID: pelne wyszukanie (z fallbackiem do usunietych), cap 50
-            data = idosell_client.find_products(query, limit=50, availability=avail)
+            data = idosell_client.find_products(query, limit=50, availability=avail,
+                                                season=season)
             rows = [_ido_row_ui(p) for p in data["products"]]
             rows.sort(key=lambda r: r["id"], reverse=desc)
             rows = rows[offset:offset + limit]
@@ -1620,27 +1624,29 @@ def idosell_products():
         elif query:
             # nazwa/marka (np. "Bobux") lub kod - paginowane, pelny total
             page_idx = offset // limit
-            res = idosell_client.search_active("text", query, page_idx, limit, avail)
+            res = idosell_client.search_active("text", query, page_idx, limit, avail, season)
             if res["total"] == 0 and page_idx == 0:
-                res = idosell_client.search_active("code", query, 0, limit, avail)
+                res = idosell_client.search_active("code", query, 0, limit, avail, season)
             rows = [_ido_row_ui(p) for p in res["products"]]
             rows.sort(key=lambda r: r["id"], reverse=desc)
             total = res["total"]
         elif desc:
-            total = idosell_client.scan_page(0, 1, availability=avail)["total"]
+            total = idosell_client.scan_page(0, 1, availability=avail, season=season)["total"]
             start = max(0, total - offset - limit)
             end = max(0, total - offset)
             asc = []
             if end > start:
                 p0, p1 = start // limit, (end - 1) // limit
                 for p in range(p0, p1 + 1):
-                    asc += idosell_client.scan_page(p, limit, availability=avail)["products"]
+                    asc += idosell_client.scan_page(p, limit, availability=avail,
+                                                    season=season, with_attrs=True)["products"]
                 window = list(reversed(asc[start - p0 * limit:end - p0 * limit]))
             else:
                 window = []
             rows = [_ido_row_ui(p) for p in window]
         else:
-            page = idosell_client.scan_page(offset // limit, limit, availability=avail)
+            page = idosell_client.scan_page(offset // limit, limit, availability=avail,
+                                            season=season, with_attrs=True)
             rows = [_ido_row_ui(p) for p in page["products"]]
             total = page["total"]
     except idosell_client.IdoSellError as e:

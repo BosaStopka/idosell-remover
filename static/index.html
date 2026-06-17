@@ -527,6 +527,14 @@
           <option value="y">Dostępne</option>
           <option value="n">Niedostępne</option>
         </select>
+        <select id="idoSeason" title="Filtr po parametrze 'Pora roku' (zimowych nie obrabiamy teraz)">
+          <option value="" selected>Sezon: wszystkie</option>
+          <option value="bez-zimy">❄ bez zimowych</option>
+          <option value="wiosna">wiosna</option>
+          <option value="lato">lato</option>
+          <option value="jesien">jesień</option>
+          <option value="zima">tylko zimowe</option>
+        </select>
         <select id="idoState" class="hidden">
           <option value="all" selected>Wszystkie moje</option>
           <option value="processed">Obrobione</option>
@@ -976,6 +984,8 @@ function render() {
       <button class="grp-toggle" onclick="toggleGroup('${esc(pid)}')" title="Zwiń / rozwiń">${collapsed ? "▸" : "▾"}</button>
       <h3>📁 ${esc(pid)}${meta.code ? ` · ${esc(meta.code)}` : ""}</h3>
       ${meta.executed ? `<span class="badge done" title="Galeria wysłana do IdoSell">✅ wysłane</span>` : ""}
+      ${(meta.category && meta.category.length) ? `<span class="badge" title="Rodzaj (kategoria z IdoSell)">${esc(meta.category.join(", "))}</span>` : ""}
+      ${(meta.season && meta.season.length) ? `<span class="badge" style="${meta.season.includes("zima") ? "color:#74b9ff;border:1px solid #74b9ff" : ""}" title="Pora roku (sezon z IdoSell)">${meta.season.includes("zima") ? "❄ " : ""}${esc(meta.season.join("/"))}</span>` : ""}
       <span class="badge">${doneCount}/${gjobs.length} gotowych</span>
       ${flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ ${flagged} do przeglądu</span>`
                 : (allDone && doneCount ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">✓ QA OK</span>` : "")}
@@ -1933,6 +1943,7 @@ async function loadIdoProducts(reset) {
     if (q) params.set("query", q);
     params.set("sort", $("idoSort").value);
     if ($("idoAvail").value) params.set("avail", $("idoAvail").value);
+    if ($("idoSeason").value) params.set("season", $("idoSeason").value);
     if (vm === "mine") { params.set("view", "mine"); params.set("state", $("idoState").value); }
   }
   let data;
@@ -1946,7 +1957,8 @@ async function loadIdoProducts(reset) {
   }
   let html = reset ? "" : $("idoProducts").innerHTML;
   for (const p of data.products) {
-    idoMeta[String(p.id)] = { code: p.code || null, executed: !!p.executed };
+    idoMeta[String(p.id)] = { code: p.code || null, executed: !!p.executed,
+                              category: p.category || [], season: p.season || [] };
     const checked = selectedIdo.has(String(p.id)) ? "checked" : "";
     html += `<div class="card">
       <div class="thumb white">${p.image ? `<img src="${esc(p.image)}" loading="lazy" decoding="async">` : `<span style="font-size:26px">🖼</span>`}
@@ -2042,6 +2054,7 @@ $("idoViewMode").addEventListener("change", () => loadIdoProducts(true));
 $("idoSort").addEventListener("change", () => loadIdoProducts(true));
 $("idoState").addEventListener("change", () => loadIdoProducts(true));
 $("idoAvail").addEventListener("change", () => loadIdoProducts(true));
+$("idoSeason").addEventListener("change", () => loadIdoProducts(true));
 $("idoSearchBtn").addEventListener("click", () => loadIdoProducts(true));
 $("idoSearch").addEventListener("keydown", e => { if (e.key === "Enter") loadIdoProducts(true); });
 $("idoMoreBtn").addEventListener("click", () => loadIdoProducts(false));
