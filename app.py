@@ -1600,16 +1600,22 @@ def get_ido_series_index(refresh: bool = False) -> dict:
     if not refresh and SERIES_INDEX_FILE.exists():
         try:
             cached = json.loads(SERIES_INDEX_FILE.read_text(encoding="utf-8"))
-            if time.time() - cached.get("at", 0) < SERIES_INDEX_TTL:
-                return cached["index"]
-        except (json.JSONDecodeError, OSError):
+            idx = cached.get("index") or {}
+            # cache-first: format v2 trzyma gotowe wiersze ("products"); stary
+            # (tylko "ids") ignorujemy i przebudowujemy, by przelaczanie bylo instant
+            fresh = time.time() - cached.get("at", 0) < SERIES_INDEX_TTL
+            v2 = not idx or "products" in next(iter(idx.values()))
+            if fresh and v2:
+                return idx
+        except (json.JSONDecodeError, OSError, StopIteration):
             pass
     index = {}
     page = 0
     while True:
         data = idosell_client.search_products({
             "returnProducts": "active",
-            "returnElements": ["code", "series"],
+            # pelne dane do wyswietlenia -> serie renderujemy z cache bez live API
+            "returnElements": idosell_client.SCAN_RETURN_ELEMENTS + ["parameters", "series"],
             "productParametersParams": idosell_client._param_filter(),
             "resultsPage": page, "resultsLimit": 100,
         })
@@ -1620,8 +1626,8 @@ def get_ido_series_index(refresh: bool = False) -> dict:
             if not sid:
                 continue
             entry = index.setdefault(str(sid), {
-                "name": ser.get("seriesPanelName") or "", "ids": []})
-            entry["ids"].append(prod.get("productId"))
+                "name": ser.get("seriesPanelName") or "", "products": []})
+            entry["products"].append(_ido_row_ui(idosell_client._product_row(prod)))
         page += 1
         if page >= data.get("resultsNumberPage", 0) or not results:
             break
@@ -1643,7 +1649,7 @@ def idosell_series_list():
     except idosell_client.IdoSellError as e:
         return jsonify({"error": str(e)}), 400
     out = [{"id": sid, "name": e.get("name") or f"seria {sid}",
-            "count": len(e.get("ids") or [])} for sid, e in idx.items()]
+            "count": len(e.get("products") or [])} for sid, e in idx.items()]
     out.sort(key=lambda s: s["name"].lower())
     return jsonify({"series": out, "total": len(out)})
 
@@ -1678,22 +1684,19 @@ def idosell_products():
     series_filter = request.args.get("series", "").strip()  # seriesId = caly model
     try:
         if series_filter:
-            # caly model (seria) z indeksu - podsumowanie liczone po CALEJ serii
+            # caly model (seria) PROSTO z cache (cache-first, instant) - dane do
+            # wyswietlenia juz w indeksie, dociagamy tylko lokalne flagi (dysk).
             idx = get_ido_series_index(refresh=request.args.get("refresh") == "1")
-            entry = idx.get(series_filter) or {"ids": [], "name": ""}
-            ids = sorted(entry["ids"], reverse=desc)
-            total = len(ids)
-            page_ids = ids[offset:offset + limit]
-            rowmap = _ido_fetch_rows(page_ids)
+            entry = idx.get(series_filter) or {"products": [], "name": ""}
+            prods = sorted(entry["products"], key=lambda r: r["id"], reverse=desc)
+            total = len(prods)
             rows = []
-            for pid in page_ids:
-                base = rowmap.get(pid) or {
-                    "id": pid, "code": None, "name": None, "image": None,
-                    "images_count": None, "archived_tag": False, "deleted": False}
-                base.update(ido_local_flags(pid))
+            for r in prods[offset:offset + limit]:
+                base = dict(r)
+                base.update(ido_local_flags(base["id"]))
                 rows.append(base)
-            allf = [ido_local_flags(i) for i in ids]
-            summary = {"shown": len(ids),
+            allf = [ido_local_flags(p["id"]) for p in prods]
+            summary = {"shown": len(prods),
                        "processed": sum(1 for f in allf if f["processed"]),
                        "executed": sum(1 for f in allf if f["executed"])}
             return jsonify({"products": rows, "total": total, "summary": summary,
