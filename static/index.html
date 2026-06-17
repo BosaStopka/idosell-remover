@@ -710,6 +710,19 @@ async function retryJob(id, el) {
   } catch { el.textContent = "↻ Ponów"; }
 }
 
+// odbicie lustrzane gotowego zdjecia (instant, bez re-inference) - rev busta cache
+async function flipPhoto(jobId) {
+  try {
+    const res = await api(`/api/jobs/${jobId}/flip`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    lastJobsKey = "";   // wymus przerysowanie ze swiezym rev (nowy URL miniatury)
+    refresh();
+  } catch { alert("Błąd połączenia"); }
+}
+
 // ---------- przetwarzanie ----------
 goBtn.addEventListener("click", async () => {
   if (!pending.length) return;
@@ -931,8 +944,8 @@ function render() {
       const [label, cls] = STATUS[j.status] || [j.status, ""];
       let thumb = `<div class="spin"></div>`;
       if (j.status === "done") {
-        // stabilny cache-buster: zmienia sie tylko po ponownej obrobce
-        const after = `/done/${j.result}?t=${j.id}-${j.seconds || 0}`;
+        // stabilny cache-buster: zmienia sie po ponownej obrobce (seconds) i odbiciu (rev)
+        const after = `/done/${j.result}?t=${j.id}-${j.seconds || 0}-${j.rev || 0}`;
         const editBtn = j.editable !== false
           ? `<button class="edit-btn" onclick="event.stopPropagation();openEditor('${j.id}')" title="Edytor maski (pędzel)">✏️</button>`
           : "";
@@ -957,6 +970,7 @@ function render() {
           <div style="display:flex;gap:10px;align-items:center">
             ${j.status === "done" ? `<a href="/done/${j.result}" download>Pobierz JPG</a>` : ""}
             ${canRetry ? `<a href="#" onclick="retryJob('${j.id}', this); return false" title="Obrob ponownie z aktualnymi ustawieniami">↻ Ponów</a>` : ""}
+            ${j.status === "done" ? `<a href="#" onclick="flipPhoto('${j.id}'); return false" title="Odbij lustrzanie gotowego zdjęcia (kierunek noska) - bez ponownej obróbki">⇄ Odbij</a>` : ""}
           </div>
           ${j.status === "error" ? `<span style="color:var(--err);font-size:12px">${esc(j.error || "")}</span>` : ""}
         </div></div>`;

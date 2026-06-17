@@ -360,7 +360,7 @@ def api_jobs():
             j = jobs[jid]
             out.append({k: j.get(k) for k in
                         ("id", "name", "status", "result", "error",
-                         "source", "orig", "seconds", "editable", "qa")})
+                         "source", "orig", "seconds", "editable", "qa", "rev")})
     return jsonify(out)
 
 
@@ -412,6 +412,36 @@ def api_retry(job_id):
     queue.put(job_id)
     persist_jobs()
     return jsonify({"job": job_id})
+
+
+@app.post("/api/jobs/<job_id>/flip")
+def api_flip(job_id):
+    """Odbicie lustrzane GOTOWEGO zdjecia (kierunek noska) - na gotowym pliku.
+    Pipeline jest symetryczny w poziomie, wiec flip wyniku = obrobka z mirror,
+    ale NATYCHMIAST (bez re-inference). Aktualizuje flage mirror joba (spojnosc
+    przy 'Ponow') i podbija 'rev' (cache-busting miniatury w UI)."""
+    from PIL import Image, ImageOps
+    with lock:
+        job = jobs.get(job_id)
+        if not job or job.get("status") != "done" or not job.get("result"):
+            return jsonify({"error": "Zdjecie nie jest gotowe"}), 409
+        rel = job["result"]
+    path = DONE_DIR / rel
+    if not path.exists():
+        return jsonify({"error": "Brak pliku wyniku"}), 404
+    try:
+        img = Image.open(path).convert("RGB")
+        ImageOps.mirror(img).save(path, quality=95)
+    except Exception as e:
+        return jsonify({"error": f"Blad odbicia: {e}"}), 500
+    with lock:
+        opts = dict(job.get("options") or {})
+        opts["mirror"] = not bool(opts.get("mirror"))
+        job["options"] = opts
+        job["rev"] = (job.get("rev") or 0) + 1
+        mirror = opts["mirror"]
+    persist_jobs()
+    return jsonify({"ok": True, "mirror": mirror, "rev": job["rev"]})
 
 
 @app.post("/api/jobs/stop")
