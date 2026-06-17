@@ -549,6 +549,9 @@
           <option value="kalosze">kalosze</option>
           <option value="pierwsze-buty">pierwsze buty</option>
         </select>
+        <select id="idoSeriesPick" title="Wybierz model (serię IdoSell) - załaduje wszystkie warianty od razu">
+          <option value="" selected>Model: wszystkie</option>
+        </select>
         <select id="idoState" class="hidden">
           <option value="all" selected>Wszystkie moje</option>
           <option value="processed">Obrobione</option>
@@ -1942,15 +1945,39 @@ async function idosellStatus() {
     <span class="badge" style="margin-left:6px">faza 1: tylko odczyt</span>`;
   $("idoBrowser").classList.remove("hidden");
   if (!$("idoProducts").innerHTML) loadIdoProducts(true);
+  populateSeriesPicker();
   idoScanStatus();
 }
 
 let idoSeriesFilter = null;   // {id, name} gdy ogladamy caly model (serie)
 function loadSeries(id, name) {
   idoSeriesFilter = { id: String(id), name: name || ("seria " + id) };
+  const sel = $("idoSeriesPick"); if (sel) sel.value = String(id);  // sync picker
   loadIdoProducts(true);
 }
-function exitSeries() { idoSeriesFilter = null; loadIdoProducts(true); }
+function exitSeries() {
+  idoSeriesFilter = null;
+  const sel = $("idoSeriesPick"); if (sel) sel.value = "";
+  loadIdoProducts(true);
+}
+async function populateSeriesPicker() {
+  const sel = $("idoSeriesPick");
+  if (!sel || sel.dataset.loaded) return;   // lista serii raz na sesje
+  try {
+    const res = await api("/api/idosell/series");
+    const data = await res.json();
+    if (data.series) {
+      sel.insertAdjacentHTML("beforeend", data.series.map(s =>
+        `<option value="${esc(s.id)}">${esc(s.name)} (${s.count})</option>`).join(""));
+      sel.dataset.loaded = "1";
+    }
+  } catch {}
+}
+$("idoSeriesPick").addEventListener("change", e => {
+  const id = e.target.value;
+  if (id) loadSeries(id, e.target.options[e.target.selectedIndex].text);
+  else exitSeries();
+});
 
 async function loadIdoProducts(reset) {
   if (reset) { idoOffset = 0; $("idoProducts").innerHTML = `<div class="empty">Ładowanie...</div>`; }

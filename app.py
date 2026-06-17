@@ -1634,6 +1634,20 @@ def get_ido_series_index(refresh: bool = False) -> dict:
     return index
 
 
+@app.get("/api/idosell/series")
+def idosell_series_list():
+    """Lista serii (modeli) z indeksu - do pickera 'wybierz model' w UI.
+    Zwraca id, nazwe i liczbe wariantow; sortowane po nazwie."""
+    try:
+        idx = get_ido_series_index(refresh=request.args.get("refresh") == "1")
+    except idosell_client.IdoSellError as e:
+        return jsonify({"error": str(e)}), 400
+    out = [{"id": sid, "name": e.get("name") or f"seria {sid}",
+            "count": len(e.get("ids") or [])} for sid, e in idx.items()]
+    out.sort(key=lambda s: s["name"].lower())
+    return jsonify({"series": out, "total": len(out)})
+
+
 @app.get("/api/idosell/products")
 def idosell_products():
     """Listing produktow.
