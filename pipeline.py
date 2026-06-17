@@ -92,14 +92,27 @@ def object_bbox(rgba: Image.Image):
 
 
 def is_full_bleed(rgba: Image.Image) -> bool:
-    """Ujecie pelnokadrowe (zblizenie/detal): obiekt uciety krawedziami
-    oryginalu. Takie zdjecie ma wypelnic kadr, bez 'ramki' i bez cienia."""
+    """Zdjecie PELNOKADROWE (zblizenie/detal): istotna maska siega OBU
+    przeciwleglych krawedzi w co najmniej jednej osi (lewo+prawo albo
+    gora+dol). Taki kadr wypelniamy biela W MIEJSCU - bez wycinania,
+    zmniejszania i cienia. Dotkniecie tylko jednej krawedzi albo margines
+    ze wszystkich stron -> False (zwykle wycinanie produktu). Warunek 'obu
+    krawedzi' chroni normalne ciasne zdjecia produktu (dotykaja najwyzej
+    jednej krawedzi) przed bledna klasyfikacja jako detal."""
     import numpy as np
-    a = np.array(rgba.split()[3]) > 128
-    if not a.any():
+    a = np.array(rgba.split()[3])
+    if not (a > 128).any():
         return False
-    edges = [a[0].mean(), a[-1].mean(), a[:, 0].mean(), a[:, -1].mean()]
-    return sum(1 for e in edges if e > 0.15) >= 2
+    x0, y0, x1, y1 = object_bbox(rgba)
+    h, w = a.shape
+    tol = max(2, int(0.006 * max(w, h)))   # ~0.6% kadru tolerancji
+    spans_x = x0 <= tol and x1 >= w - tol
+    spans_y = y0 <= tol and y1 >= h - tol
+    # albo produkt WYPELNIA kadr w obu osiach (>=80%) - detal/zblizenie ma malo
+    # tla; zwykly produkt (np. niski profil buta) wypelnia jedna os, drugiej nie
+    # (sandal w bok: 89% szer., 26% wys.) -> nie zostanie uznany za pelnokadrowy.
+    fills = (x1 - x0) / w >= 0.80 and (y1 - y0) / h >= 0.80
+    return spans_x or spans_y or fills
 
 
 def whiten_neutral(rgba: Image.Image) -> Image.Image:
@@ -189,34 +202,32 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
     src_rgb (oryginal sprzed wyciecia) potrzebny do trybu ZACHOWAJ; bez niego
     (np. edytor maski) zawsze MINIMAL."""
     size = (int(opt["size"]), int(opt["size"]))
-    full_bleed = is_full_bleed(rgba)
     alpha_full = rgba.split()[3]
     shadow_on = bool(opt.get("shadow", True))
     mode = opt.get("shadow_mode", "auto")
+    # PELNOKADROWE (detal/zblizenie wypelniajace kadr) tylko w glownym pipeline
+    # (jest src_rgb). Edytor maski (compose_from, brak src_rgb) zawsze idzie
+    # trybem minimal - patrz docstring compose_from.
+    full_bleed = src_rgb is not None and is_full_bleed(rgba)
 
-    # ---- FULL-BLEED (zblizenie/detal): tlo->biel z ZACHOWANIEM kadrowania ----
-    # Stary cover wycinal buta i skalowal bbox - na ukosnym zblizeniu rogi bboxa
-    # byly przezroczyste -> bialy naroznik ("ramka"). Teraz bielimy tlo w miejscu
-    # (preserve_to_white) i cover-skalujemy CALY kadr (nieprzezroczysty: biel+but),
-    # wiec but zostaje przy krawedziach jak w oryginale, bez ramki.
+    # ---- PELNOKADROWE (zblizenie/detal): TYLKO biel, bez kwadratu i bez pasow --
+    # Detal wypelniajacy kadr zostaje w ORYGINALNYM kadrze i proporcjach -
+    # bielimy tylko tlo (preserve_to_white), NIE wycinamy, NIE dokladamy bialych
+    # pasow ani kwadratowego canvasu (pasy wygladaly zle). Skala: dluzszy bok ->
+    # size (downscale duzych; lekki upscale malych do max_upscale). Kadrowanie/
+    # proporcje dopasuje samo sklep - jak z oryginalnym pelnokadrowym. Bez cienia.
     if full_bleed:
-        if src_rgb is not None:
-            pimg = preserve_to_white(
-                src_rgb, alpha_full, int(opt.get("preserve_plate_pct", 88)))
-        else:  # edytor maski: zloz wyciety but na bieli (brak oryginalu tla)
-            pimg = Image.new("RGB", rgba.size, (255, 255, 255))
-            pimg.paste(rgba.convert("RGB"), (0, 0), alpha_full)
+        pimg = preserve_to_white(
+            src_rgb, alpha_full, int(opt.get("preserve_plate_pct", 88)))
         w, h = pimg.size
-        ratio = min(max(size[0] / w, size[1] / h), float(opt["max_upscale"]))
+        ratio = min(size[0] / max(w, h), float(opt["max_upscale"]))
         if ratio != 1:
-            pimg = pimg.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+            pimg = pimg.resize(
+                (max(1, int(w * ratio)), max(1, int(h * ratio))), Image.LANCZOS)
             if opt["sharpen"] and ratio > 1.3:
                 pimg = pimg.filter(
                     ImageFilter.UnsharpMask(radius=1.0, percent=22, threshold=3))
-        canvas = Image.new("RGB", size, (255, 255, 255))
-        nw, nh = pimg.size
-        canvas.paste(pimg, ((size[0] - nw) // 2, (size[1] - nh) // 2))
-        return _apply_colors(canvas, opt)
+        return _apply_colors(pimg, opt)
 
     # ---- ZACHOWAJ: realny cien z oryginalu ----
     want_preserve = shadow_on and src_rgb is not None and mode in ("auto", "preserve")
@@ -258,15 +269,31 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
     ow, oh = rgba.size
     ox, oy = (size[0] - ow) // 2, (size[1] - oh) // 2
     if shadow_on and mode != "none":
-        # cienka linia kontaktu: sylwetka zsunieta minimalnie + maly blur
+        # cienka linia kontaktu: sylwetka zsunieta minimalnie + maly blur.
+        # SKALA z wiekszego wymiaru (nie samej wysokosci) - inaczej szerokie
+        # niskie obiekty (np. para butow w poziomie) dostawaly cien tak cienki,
+        # ze niewidoczny; wysokie - wyrazny. Teraz spojnie dla obu.
+        import numpy as np
+        from scipy import ndimage
         alpha = rgba.split()[3]
         op = float(opt["shadow_opacity"])
-        off = max(3, int(oh * 0.012))
-        blur = max(5, int(oh * 0.011))
+        od = max(ow, oh)
+        off = max(6, int(od * 0.012))
+        blur = max(6, int(od * 0.011))
         layer = Image.new("L", size, 0)
         layer.paste(alpha, (ox, oy + off))
         layer = layer.filter(ImageFilter.GaussianBlur(blur))
         layer = layer.point(lambda v: int(v * op))
+        # cien NIE moze przebijac przez wewnetrzne otwory (np. sandal) ani spod
+        # produktu: zeruj go tam, gdzie pada WYPELNIONA sylwetka buta (otwory
+        # zamkniete) na jej wlasnej pozycji - zostaje tylko smuga kontaktu
+        # ponizej/obok krawedzi, a przez otwory widac biel jak w oryginale.
+        occ = np.zeros((size[1], size[0]), dtype=bool)
+        a_bin = ndimage.binary_fill_holes(np.asarray(alpha) > 40)
+        occ[oy:oy + oh, ox:ox + ow] = a_bin
+        layer_arr = np.asarray(layer).copy()
+        layer_arr[occ] = 0
+        layer = Image.fromarray(layer_arr, "L")
         black = Image.new("RGBA", size, (0, 0, 0, 255))
         black.putalpha(layer)
         canvas.alpha_composite(black)
@@ -369,9 +396,11 @@ def process_bytes(data: bytes, opt: dict, with_parts: bool = False):
     # alfa z podbitego obrazu, piksele z ORYGINALU
     rgba = src.convert("RGBA")
     rgba.putalpha(seg.split()[3])
+    # full_bleed: detal/zblizenie wypelniajace kadr (obie krawedzie / >=80%).
+    # Wartosc idzie do qa_check (pomija kontrole bialych naroznikow - detal
+    # legalnie wypelnia kadr) oraz do compose (tam wybiela tlo w miejscu,
+    # bez wycinania/kwadratu/cienia). Zwykly produkt = False -> minimal.
     full_bleed = is_full_bleed(rgba)
-    # ZAWSZE wycinamy tlo (wczesniej full-bleed zostawial szare tlo +
-    # biale ramki). Przy detalu po prostu wypelniamy kadr (padding 1.0).
     rgba = refine_edges(rgba, float(options["edge_feather"]))
     # src (oryginal sprzed wyciecia) -> tryb ZACHOWAJ moze odzyskac realny cien
     final = compose(rgba, options, src_rgb=src)
@@ -384,7 +413,9 @@ def process_bytes(data: bytes, opt: dict, with_parts: bool = False):
 
 
 def compose_from(rgb: Image.Image, alpha: Image.Image, opt: dict) -> Image.Image:
-    """Rekompozycja z recznie poprawiona maska - bez inferencji (sekundy)."""
+    """Rekompozycja z recznie poprawiona maska - bez inferencji (sekundy).
+    BEZ src_rgb -> compose idzie trybem MINIMAL (full_bleed i ZACHOWAJ
+    wymagaja src_rgb): wymazane piksele -> CZYSTA BIEL, jak oczekuje edytor."""
     options = {**DEFAULTS, **opt}
     rgba = rgb.convert("RGB").copy()
     rgba.putalpha(alpha.convert("L"))
