@@ -1409,10 +1409,20 @@ async function openIdoPlan(productId) {
       <div style="padding:8px;text-align:center;font-size:12px;color:${color}">
         ${it.index}. ${lbl}${it.action === "process" && !it.local ? " (czeka na obróbkę)" : ""}
       </div>
+      <div class="order-row">
+        <button onclick="idoPlanMove(${it.index},-1)" ${it.action === "delete" ? "disabled" : ""} title="Wcześniej w galerii">◀</button>
+        <span title="Kolejność w galerii">${it.index}</span>
+        <button onclick="idoPlanMove(${it.index},1)" ${it.action === "delete" ? "disabled" : ""} title="Później w galerii">▶</button>
+      </div>
       <div class="seg">
         <button class="process ${it.action === "process" ? "on" : ""}" onclick="idoPhotoAction(${it.index}, 'process')" title="Wytnij tło (dokolejkuje tylko to zdjęcie)">Obrób</button>
         <button class="keep ${it.action === "keep" ? "on" : ""}" onclick="idoPhotoAction(${it.index}, 'keep')">Zostaw</button>
         <button class="delete ${it.action === "delete" ? "on" : ""}" onclick="idoPhotoAction(${it.index}, 'delete')">Usuń</button>
+      </div>
+      <div class="icon-row" title="Przypnij zdjęcie do slotu panelu IdoSell (jedno na typ)">
+        <button class="${(it.icons || []).includes("shop") ? "on" : ""}" ${it.action === "delete" ? "disabled" : ""} onclick="idoPlanIcon(${it.index},'shop')">Lista</button>
+        <button class="${(it.icons || []).includes("group") ? "on" : ""}" ${it.action === "delete" ? "disabled" : ""} onclick="idoPlanIcon(${it.index},'group')">Grupa</button>
+        <button class="${(it.icons || []).includes("auction") ? "on" : ""}" ${it.action === "delete" ? "disabled" : ""} onclick="idoPlanIcon(${it.index},'auction')">Bez tła</button>
       </div></div>`;
   }
   html += `</div>`;
@@ -1529,6 +1539,21 @@ async function idoPhotoAction(index, action) {
   if (data.queued) startPolling();   // obrobka tego zdjecia w toku
   openIdoPlan(planOfferId);          // odswiez okno planu (nowy stan)
 }
+
+// kuracja planu PO obrobce: kolejnosc galerii + przypisanie ikon (bez re-obrobki)
+async function idoPlanCurate(fields) {
+  const fd = new FormData();
+  for (const k in fields) fd.append(k, fields[k]);
+  let data;
+  try {
+    const res = await api(`/api/idosell/products/${planOfferId}/plan-curate`, { method: "POST", body: fd });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); return; }
+  openIdoPlan(planOfferId);   // przerysuj z nowa kolejnoscia/ikonami
+}
+function idoPlanMove(index, dir) { idoPlanCurate({ op: "move", index, dir }); }
+function idoPlanIcon(index, type) { idoPlanCurate({ op: "icon", index, type }); }
 
 // "Dodaj zdjecie z dysku" w oknie planu: zapisz do extras -> dopnij do planu
 // jako process + dokolejkuj obrobke -> auto-refresh okna gdy gotowe

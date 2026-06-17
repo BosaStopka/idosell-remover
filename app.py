@@ -1959,6 +1959,47 @@ def idosell_photo_action(product_id):
     return jsonify({"ok": True, "action": action, "queued": queued})
 
 
+@app.post("/api/idosell/products/<int:product_id>/plan-curate")
+def idosell_plan_curate(product_id):
+    """Kuracja planu PO obrobce, bez ponownej obrobki: zmiana KOLEJNOSCI galerii
+    (op=move) i przypisania IKON Lista/Grupa/Bez tla (op=icon). Zapisuje plan.json
+    - wysylka honoruje kolejnosc decyzji i ikony. Ikona jest unikalna (jedno
+    zdjecie na typ). Usuniete zdjecia pomijamy."""
+    pf = DONE_DIR / str(product_id) / "plan.json"
+    if not pf.exists():
+        return jsonify({"error": "Brak planu dla tego produktu"}), 404
+    plan = json.loads(pf.read_text(encoding="utf-8"))
+    decs = plan.get("decisions") or []
+    idx = request.form.get("index", type=int)
+    pos = next((i for i, d in enumerate(decs) if d.get("index") == idx), None)
+    if pos is None:
+        return jsonify({"error": "Nie ma takiego zdjecia w planie"}), 404
+    op = request.form.get("op")
+    if op == "move":
+        new = pos + (request.form.get("dir", type=int) or 0)
+        if 0 <= new < len(decs):
+            decs[pos], decs[new] = decs[new], decs[pos]
+    elif op == "icon":
+        typ = request.form.get("type")
+        if typ not in idosell_client.SETTABLE_ICON_TYPES:
+            return jsonify({"error": "Nieprawidlowy typ ikony"}), 400
+        if decs[pos].get("action") == "delete":
+            return jsonify({"error": "Usuniete zdjecie nie moze byc ikona"}), 400
+        cur = decs[pos].get("icons") or []
+        if typ in cur:
+            decs[pos]["icons"] = [t for t in cur if t != typ]
+        else:
+            for d in decs:    # ikona unikalna - zdejmij z innych
+                if d.get("icons"):
+                    d["icons"] = [t for t in d["icons"] if t != typ]
+            decs[pos]["icons"] = (decs[pos].get("icons") or []) + [typ]
+    else:
+        return jsonify({"error": "Nieznana operacja"}), 400
+    plan["decisions"] = decs
+    pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+    return jsonify({"ok": True})
+
+
 @app.post("/api/idosell/products/<int:product_id>/add-local")
 def idosell_add_local(product_id):
     """Zapisuje zdjecie z dysku do extras/ - do dolaczenia do planu."""
