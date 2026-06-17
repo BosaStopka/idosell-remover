@@ -490,6 +490,7 @@
         <button class="btn btn-ghost hidden" id="stopBtn" style="color:var(--err);border-color:var(--err)">⏹ Stop kolejki</button>
         <button class="btn btn-primary" id="bulkPushBtn" style="margin-left:auto">📤 Wyślij gotowe do IdoSell</button>
         <label class="qa-filter"><input type="checkbox" id="qaOnly"> ⚠ Tylko z uwagami QA</label>
+        <label class="qa-filter"><input type="checkbox" id="hideSent"> 🙈 Ukryj wysłane</label>
       </div>
       <div id="cards"><div class="empty">Dodaj zdjęcia, aby zacząć</div></div>
     </section>
@@ -736,6 +737,7 @@ goBtn.addEventListener("click", async () => {
   render();
 });
 $("qaOnly").addEventListener("change", e => { qaOnly = e.target.checked; render(); });
+$("hideSent").addEventListener("change", e => { hideSent = e.target.checked; render(); });
 $("stopBtn").addEventListener("click", async () => {
   const res = await api("/api/jobs/stop", { method: "POST" });
   const data = await res.json();
@@ -916,8 +918,11 @@ const STATUS = {
 };
 
 const QA_LBL = { tlo: "tło", maly: "za mały", proporcje: "proporcje", fragmenty: "fragmenty", pusta: "pusta maska" };
-let qaOnly = false;
+let qaOnly = false, hideSent = false;
 const collapsedGroups = new Set();
+// pid -> {code, executed} z przegladarki produktow (Studio grupuje po numerycznym
+// ID; SKU/kod i status 'wyslane' bierzemy stad, jesli produkt byl wczytany)
+const idoMeta = {};
 function toggleGroup(pid) {
   if (collapsedGroups.has(pid)) collapsedGroups.delete(pid);
   else collapsedGroups.add(pid);
@@ -954,13 +959,16 @@ function render() {
     const doneCount = gjobs.filter(j => j.status === "done").length;
     const flagged = gjobs.filter(j => j.status === "done" && j.qa && !j.qa.ok).length;
     if (qaOnly && !flagged) continue;   // filtr: tylko grupy z uwagami QA
+    const meta = idoMeta[pid] || {};
+    if (hideSent && meta.executed) continue;   // ukryj produkty juz wyslane
     const isAllegro = gjobs.some(j => j.source === "allegro");
     const isIdo = gjobs.some(j => j.source === "idosell");
     const collapsed = collapsedGroups.has(pid);
     const allDone = doneCount === gjobs.length;
     html += `<div class="group-head">
       <button class="grp-toggle" onclick="toggleGroup('${esc(pid)}')" title="Zwiń / rozwiń">${collapsed ? "▸" : "▾"}</button>
-      <h3>📁 ${esc(pid)}</h3>
+      <h3>📁 ${esc(pid)}${meta.code ? ` · ${esc(meta.code)}` : ""}</h3>
+      ${meta.executed ? `<span class="badge done" title="Galeria wysłana do IdoSell">✅ wysłane</span>` : ""}
       <span class="badge">${doneCount}/${gjobs.length} gotowych</span>
       ${flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ ${flagged} do przeglądu</span>`
                 : (allDone && doneCount ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">✓ QA OK</span>` : "")}
@@ -1927,6 +1935,7 @@ async function loadIdoProducts(reset) {
   }
   let html = reset ? "" : $("idoProducts").innerHTML;
   for (const p of data.products) {
+    idoMeta[String(p.id)] = { code: p.code || null, executed: !!p.executed };
     const checked = selectedIdo.has(String(p.id)) ? "checked" : "";
     html += `<div class="card">
       <div class="thumb white">${p.image ? `<img src="${esc(p.image)}" loading="lazy" decoding="async">` : `<span style="font-size:26px">🖼</span>`}
