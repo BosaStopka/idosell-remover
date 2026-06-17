@@ -535,6 +535,17 @@
           <option value="jesien">jesień</option>
           <option value="zima">tylko zimowe</option>
         </select>
+        <select id="idoCategory" title="Filtr po parametrze 'Rodzaj' (typ obuwia)">
+          <option value="" selected>Kategoria: wszystkie</option>
+          <option value="sandaly">sandały</option>
+          <option value="kapcie">kapcie</option>
+          <option value="sneakersy">sneakersy</option>
+          <option value="buty-sportowe">buty sportowe</option>
+          <option value="buty-przejsciowe">buty przejściowe</option>
+          <option value="buty-zimowe">buty zimowe</option>
+          <option value="kalosze">kalosze</option>
+          <option value="pierwsze-buty">pierwsze buty</option>
+        </select>
         <select id="idoState" class="hidden">
           <option value="all" selected>Wszystkie moje</option>
           <option value="processed">Obrobione</option>
@@ -1944,6 +1955,7 @@ async function loadIdoProducts(reset) {
     params.set("sort", $("idoSort").value);
     if ($("idoAvail").value) params.set("avail", $("idoAvail").value);
     if ($("idoSeason").value) params.set("season", $("idoSeason").value);
+    if ($("idoCategory").value) params.set("category", $("idoCategory").value);
     if (vm === "mine") { params.set("view", "mine"); params.set("state", $("idoState").value); }
   }
   let data;
@@ -2055,6 +2067,7 @@ $("idoSort").addEventListener("change", () => loadIdoProducts(true));
 $("idoState").addEventListener("change", () => loadIdoProducts(true));
 $("idoAvail").addEventListener("change", () => loadIdoProducts(true));
 $("idoSeason").addEventListener("change", () => loadIdoProducts(true));
+$("idoCategory").addEventListener("change", () => loadIdoProducts(true));
 $("idoSearchBtn").addEventListener("click", () => loadIdoProducts(true));
 $("idoSearch").addEventListener("keydown", e => { if (e.key === "Enter") loadIdoProducts(true); });
 $("idoMoreBtn").addEventListener("click", () => loadIdoProducts(false));

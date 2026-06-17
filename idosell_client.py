@@ -30,6 +30,11 @@ CATEGORY_PARAM = 88   # "Rodzaj" - typ obuwia (kategoria w UI)
 SEASON_PARAM = 38     # "Pora roku" - sezon
 SEASON_VALUES = {"wiosna": 39, "lato": 74, "jesien": 40, "zima": 98}
 WINTER_TYPE_VALUE = 99  # Rodzaj = "buty zimowe" (drugi sygnal zimy obok zima 98)
+CATEGORY_VALUES = {     # slug UI -> parameterValueId parametru "Rodzaj"
+    "sandaly": 93, "kapcie": 90, "sneakersy": 1000, "buty-zimowe": 99,
+    "kalosze": 196, "buty-przejsciowe": 800, "pierwsze-buty": 2294,
+    "buty-sportowe": 435,
+}
 TIMEOUT = 30
 MIN_INTERVAL = 0.5   # throttling: minimalny odstep miedzy zadaniami [s]
 MAX_RETRIES = 5      # liczba prob przy 429
@@ -64,17 +69,20 @@ def archive_tag_value_id() -> int:
     return int(cfg.get("archive_tag_value_id", DEFAULT_ARCHIVE_TAG_VALUE_ID))
 
 
-def _season_filter_ids(season: str | None):
-    """(enabled, disabled) value-id wg wyboru sezonu z UI:
-    '' / None  -> brak filtra
-    'wiosna'|'lato'|'jesien'|'zima' -> pokaz TYLKO ten sezon (enabled)
-    'bez-zimy' -> wyklucz zimowe (Pora roku=zima 98 + Rodzaj=buty zimowe 99)."""
-    if not season:
-        return None, None
+def _filter_ids(season: str | None = None, category: str | None = None):
+    """(enabled, disabled) value-id wg wyboru sezonu i kategorii z UI.
+    Sezon: 'wiosna'|'lato'|'jesien'|'zima' -> pokaz TYLKO ten sezon (enabled);
+           'bez-zimy' -> wyklucz zimowe (Pora roku=zima 98 + Rodzaj=buty zimowe 99).
+    Kategoria: slug z CATEGORY_VALUES -> pokaz TYLKO ten Rodzaj (enabled).
+    Enabled z roznych parametrow lacza sie AND (np. lato + sandaly)."""
+    enabled, disabled = [], []
     if season == "bez-zimy":
-        return None, [SEASON_VALUES["zima"], WINTER_TYPE_VALUE]
-    vid = SEASON_VALUES.get(season)
-    return ([vid] if vid else None), None
+        disabled += [SEASON_VALUES["zima"], WINTER_TYPE_VALUE]
+    elif season and SEASON_VALUES.get(season):
+        enabled.append(SEASON_VALUES[season])
+    if category and CATEGORY_VALUES.get(category):
+        enabled.append(CATEGORY_VALUES[category])
+    return (enabled or None), (disabled or None)
 
 
 def _param_filter(enabled=None, disabled=None) -> list:
@@ -226,13 +234,14 @@ def _product_row(prod: dict, with_tags: bool = False) -> dict:
 
 
 def scan_page(page: int = 0, limit: int = 100, availability: str = None,
-              season: str = None, with_attrs: bool = False) -> dict:
+              season: str = None, category: str = None,
+              with_attrs: bool = False) -> dict:
     """Jedna strona pelnego skanu: aktywne produkty bez tagu Archiwum.
     availability: 'y' (dostepne) / 'n' (niedostepne) / None (wszystkie).
-    season: filtr sezonu (patrz _season_filter_ids).
+    season/category: filtr sezonu i kategorii (patrz _filter_ids).
     with_attrs: dolacz parametry (kategoria/sezon) - dla przegladu produktow;
     skan tla zostawia False (lzejszy payload)."""
-    en, dis = _season_filter_ids(season)
+    en, dis = _filter_ids(season, category)
     elements = SCAN_RETURN_ELEMENTS + (["parameters"] if with_attrs else [])
     params = {
         "returnProducts": "active",
@@ -252,12 +261,12 @@ def scan_page(page: int = 0, limit: int = 100, availability: str = None,
     }
 
 
-def _find_active(query: str, field: str, limit: int,
-                 availability: str = None, season: str = None) -> list[dict]:
+def _find_active(query: str, field: str, limit: int, availability: str = None,
+                 season: str = None, category: str = None) -> list[dict]:
     """field: 'id' (productId) | 'code' (fragment kodu) | 'text' (nazwa/opis).
     Wyklucza tag Archiwum (jak skan/przeglad) - inaczej reczne wyszukanie
     zwracalo glownie archiwum, ktore wpadalo do obrobki."""
-    en, dis = _season_filter_ids(season)
+    en, dis = _filter_ids(season, category)
     params = {
         "returnProducts": "active",
         "returnElements": SCAN_RETURN_ELEMENTS + ["parameters"],
@@ -312,11 +321,11 @@ def _find_deleted(query: str, limit: int) -> list[dict]:
 
 
 def find_products(query: str, limit: int = 20, availability: str = None,
-                  season: str = None) -> dict:
+                  season: str = None, category: str = None) -> dict:
     """Reczne wyszukanie po ID, nazwie (marka/model) lub kodzie. Wyklucza tag
     Archiwum (jak skan/przeglad - archiwum nie ma trafiac do obrobki); szuka
     w aktywnych, w razie pustki w usunietych (archiwum IdoSell). Kazdy wiersz
-    ma archived_tag oraz deleted. availability: 'y'/'n'/None; season: filtr."""
+    ma archived_tag oraz deleted. availability: 'y'/'n'/None; season/category: filtr."""
     query = (query or "").strip()
     if not query:
         return {"total": 0, "products": []}
@@ -324,26 +333,27 @@ def find_products(query: str, limit: int = 20, availability: str = None,
     if query.isdigit():
         # liczba: najpierw ID, dopiero potem kod (containsCodePart "1"
         # zalewa wynikami czastkowych trafien)
-        rows = _find_active(query, "id", limit, availability, season)
+        rows = _find_active(query, "id", limit, availability, season, category)
         if not rows:
-            rows = _find_active(query, "code", limit, availability, season)
+            rows = _find_active(query, "code", limit, availability, season, category)
     else:
         # tekst: najpierw nazwa/opis (marka "Bobux"), potem fragment kodu
-        rows = _find_active(query, "text", limit, availability, season)
+        rows = _find_active(query, "text", limit, availability, season, category)
         if not rows:
-            rows = _find_active(query, "code", limit, availability, season)
-    if not rows and availability is None and not season:
+            rows = _find_active(query, "code", limit, availability, season, category)
+    if not rows and availability is None and not season and not category:
         rows = _find_deleted(query, limit)
     return {"total": len(rows), "products": rows}
 
 
 def search_active(field: str, query: str, page: int = 0, limit: int = 20,
-                  availability: str = None, season: str = None) -> dict:
+                  availability: str = None, season: str = None,
+                  category: str = None) -> dict:
     """Paginowane wyszukiwanie w aktywnych (bez tagu Archiwum) po nazwie/opisie
     (field='text', np. marka 'Bobux') lub fragmencie kodu (field='code').
-    season: filtr sezonu (patrz _season_filter_ids).
+    season/category: filtr sezonu i kategorii (patrz _filter_ids).
     Zwraca pelny total z API (nie cap) - do przegladania calej marki."""
-    en, dis = _season_filter_ids(season)
+    en, dis = _filter_ids(season, category)
     params = {
         "returnProducts": "active",
         "returnElements": SCAN_RETURN_ELEMENTS + ["parameters"],

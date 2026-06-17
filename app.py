@@ -1595,6 +1595,7 @@ def idosell_products():
     if avail not in ("y", "n"):
         avail = None
     season = request.args.get("season", "").strip() or None  # filtr sezonu
+    category = request.args.get("category", "").strip() or None  # filtr kategorii
     desc = sort == "id_desc"
     try:
         if view == "mine":
@@ -1616,7 +1617,7 @@ def idosell_products():
         if query and query.isdigit():
             # ID: pelne wyszukanie (z fallbackiem do usunietych), cap 50
             data = idosell_client.find_products(query, limit=50, availability=avail,
-                                                season=season)
+                                                season=season, category=category)
             rows = [_ido_row_ui(p) for p in data["products"]]
             rows.sort(key=lambda r: r["id"], reverse=desc)
             rows = rows[offset:offset + limit]
@@ -1624,14 +1625,15 @@ def idosell_products():
         elif query:
             # nazwa/marka (np. "Bobux") lub kod - paginowane, pelny total
             page_idx = offset // limit
-            res = idosell_client.search_active("text", query, page_idx, limit, avail, season)
+            res = idosell_client.search_active("text", query, page_idx, limit, avail, season, category)
             if res["total"] == 0 and page_idx == 0:
-                res = idosell_client.search_active("code", query, 0, limit, avail, season)
+                res = idosell_client.search_active("code", query, 0, limit, avail, season, category)
             rows = [_ido_row_ui(p) for p in res["products"]]
             rows.sort(key=lambda r: r["id"], reverse=desc)
             total = res["total"]
         elif desc:
-            total = idosell_client.scan_page(0, 1, availability=avail, season=season)["total"]
+            total = idosell_client.scan_page(0, 1, availability=avail, season=season,
+                                             category=category)["total"]
             start = max(0, total - offset - limit)
             end = max(0, total - offset)
             asc = []
@@ -1639,14 +1641,15 @@ def idosell_products():
                 p0, p1 = start // limit, (end - 1) // limit
                 for p in range(p0, p1 + 1):
                     asc += idosell_client.scan_page(p, limit, availability=avail,
-                                                    season=season, with_attrs=True)["products"]
+                                                    season=season, category=category,
+                                                    with_attrs=True)["products"]
                 window = list(reversed(asc[start - p0 * limit:end - p0 * limit]))
             else:
                 window = []
             rows = [_ido_row_ui(p) for p in window]
         else:
             page = idosell_client.scan_page(offset // limit, limit, availability=avail,
-                                            season=season, with_attrs=True)
+                                            season=season, category=category, with_attrs=True)
             rows = [_ido_row_ui(p) for p in page["products"]]
             total = page["total"]
     except idosell_client.IdoSellError as e:
