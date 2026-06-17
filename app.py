@@ -1517,6 +1517,8 @@ def _ido_row_ui(p: dict) -> dict:
         "deleted": p.get("deleted", False),
         "category": p.get("category") or [],
         "season": p.get("season") or [],
+        "series_id": p.get("series_id"),
+        "series_name": p.get("series_name") or "",
     }
 
 
@@ -1526,7 +1528,7 @@ def _ido_fetch_rows(ids: list) -> dict:
         return {}
     data = idosell_client.search_products({
         "returnProducts": "active",
-        "returnElements": idosell_client.SCAN_RETURN_ELEMENTS + ["parameters"],
+        "returnElements": idosell_client.SCAN_RETURN_ELEMENTS + ["parameters", "series"],
         "productParams": [{"productId": int(i)} for i in ids],
         "resultsPage": 0, "resultsLimit": max(100, len(ids)),
     })
@@ -1587,6 +1589,51 @@ def _ido_mine_index(state: str, query: str) -> list:
     return items
 
 
+SERIES_INDEX_FILE = BASE / "series_index.json"
+SERIES_INDEX_TTL = 3600  # 1h
+
+
+def get_ido_series_index(refresh: bool = False) -> dict:
+    """Mapa: seriesId (str) -> {name, ids[]} dla calego katalogu (bez archiwum).
+    Serwer nie filtruje po seriesId, wiec grupujemy z pelnego skanu, cache 1h.
+    Seria = natywny model IdoSell (warianty kolorystyczne maja wspolny seriesId)."""
+    if not refresh and SERIES_INDEX_FILE.exists():
+        try:
+            cached = json.loads(SERIES_INDEX_FILE.read_text(encoding="utf-8"))
+            if time.time() - cached.get("at", 0) < SERIES_INDEX_TTL:
+                return cached["index"]
+        except (json.JSONDecodeError, OSError):
+            pass
+    index = {}
+    page = 0
+    while True:
+        data = idosell_client.search_products({
+            "returnProducts": "active",
+            "returnElements": ["code", "series"],
+            "productParametersParams": idosell_client._param_filter(),
+            "resultsPage": page, "resultsLimit": 100,
+        })
+        results = data.get("results") or []
+        for prod in results:
+            ser = prod.get("productSeries") or {}
+            sid = ser.get("seriesId")
+            if not sid:
+                continue
+            entry = index.setdefault(str(sid), {
+                "name": ser.get("seriesPanelName") or "", "ids": []})
+            entry["ids"].append(prod.get("productId"))
+        page += 1
+        if page >= data.get("resultsNumberPage", 0) or not results:
+            break
+    try:
+        SERIES_INDEX_FILE.write_text(
+            json.dumps({"at": time.time(), "index": index}, ensure_ascii=False),
+            encoding="utf-8")
+    except OSError:
+        pass
+    return index
+
+
 @app.get("/api/idosell/products")
 def idosell_products():
     """Listing produktow.
@@ -1614,7 +1661,30 @@ def idosell_products():
     _SEASON_PL = {"wiosna": "wiosna", "lato": "lato", "jesien": "jesień", "zima": "zima"}
     post_season = season if (category and season in _SPEC) else None
     srv_season = None if post_season else season
+    series_filter = request.args.get("series", "").strip()  # seriesId = caly model
     try:
+        if series_filter:
+            # caly model (seria) z indeksu - podsumowanie liczone po CALEJ serii
+            idx = get_ido_series_index(refresh=request.args.get("refresh") == "1")
+            entry = idx.get(series_filter) or {"ids": [], "name": ""}
+            ids = sorted(entry["ids"], reverse=desc)
+            total = len(ids)
+            page_ids = ids[offset:offset + limit]
+            rowmap = _ido_fetch_rows(page_ids)
+            rows = []
+            for pid in page_ids:
+                base = rowmap.get(pid) or {
+                    "id": pid, "code": None, "name": None, "image": None,
+                    "images_count": None, "archived_tag": False, "deleted": False}
+                base.update(ido_local_flags(pid))
+                rows.append(base)
+            allf = [ido_local_flags(i) for i in ids]
+            summary = {"shown": len(ids),
+                       "processed": sum(1 for f in allf if f["processed"]),
+                       "executed": sum(1 for f in allf if f["executed"])}
+            return jsonify({"products": rows, "total": total, "summary": summary,
+                            "series_name": entry.get("name")})
+
         if view == "mine":
             items = _ido_mine_index(state, query)
             items.sort(key=lambda t: t[0], reverse=desc)

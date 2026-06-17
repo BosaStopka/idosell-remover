@@ -11,6 +11,7 @@ idosell_scan_state.json
 server_out.log
 server_err.log
 sku_index.json
+series_index.json
 idosell_audit.jsonl
 allegro_audit.jsonl
 done/

@@ -219,6 +219,7 @@ def _product_row(prod: dict, with_tags: bool = False) -> dict:
         key=lambda r: (r["priority"] is None, r["priority"]),
     )
     cat, season = _product_attrs(prod)
+    ser = prod.get("productSeries") or {}   # natywna seria IdoSell = model
     row = {
         "id": prod.get("productId"),
         "code": prod.get("productDisplayedCode") or "",
@@ -227,6 +228,8 @@ def _product_row(prod: dict, with_tags: bool = False) -> dict:
         "images_count": prod.get("productImagesCount", len(images)),
         "category": cat,     # parametr "Rodzaj" (puste gdy bez 'parameters')
         "season": season,    # parametr "Pora roku"
+        "series_id": ser.get("seriesId"),          # puste gdy bez 'series'
+        "series_name": ser.get("seriesPanelName") or "",
     }
     if with_tags:
         row["archived_tag"] = _has_archive_tag(prod)
@@ -242,7 +245,7 @@ def scan_page(page: int = 0, limit: int = 100, availability: str = None,
     with_attrs: dolacz parametry (kategoria/sezon) - dla przegladu produktow;
     skan tla zostawia False (lzejszy payload)."""
     en, dis = _filter_ids(season, category)
-    elements = SCAN_RETURN_ELEMENTS + (["parameters"] if with_attrs else [])
+    elements = SCAN_RETURN_ELEMENTS + (["parameters", "series"] if with_attrs else [])
     params = {
         "returnProducts": "active",
         "returnElements": elements,
@@ -269,7 +272,7 @@ def _find_active(query: str, field: str, limit: int, availability: str = None,
     en, dis = _filter_ids(season, category)
     params = {
         "returnProducts": "active",
-        "returnElements": SCAN_RETURN_ELEMENTS + ["parameters"],
+        "returnElements": SCAN_RETURN_ELEMENTS + ["parameters", "series"],
         "productParametersParams": _param_filter(en, dis),
         "resultsPage": 0,
         "resultsLimit": limit,
@@ -356,7 +359,7 @@ def search_active(field: str, query: str, page: int = 0, limit: int = 20,
     en, dis = _filter_ids(season, category)
     params = {
         "returnProducts": "active",
-        "returnElements": SCAN_RETURN_ELEMENTS + ["parameters"],
+        "returnElements": SCAN_RETURN_ELEMENTS + ["parameters", "series"],
         "productParametersParams": _param_filter(en, dis),
         "resultsPage": page,
         "resultsLimit": limit,

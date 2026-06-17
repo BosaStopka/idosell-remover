@@ -1945,13 +1945,23 @@ async function idosellStatus() {
   idoScanStatus();
 }
 
+let idoSeriesFilter = null;   // {id, name} gdy ogladamy caly model (serie)
+function loadSeries(id, name) {
+  idoSeriesFilter = { id: String(id), name: name || ("seria " + id) };
+  loadIdoProducts(true);
+}
+function exitSeries() { idoSeriesFilter = null; loadIdoProducts(true); }
+
 async function loadIdoProducts(reset) {
   if (reset) { idoOffset = 0; $("idoProducts").innerHTML = `<div class="empty">Ładowanie...</div>`; }
   const params = new URLSearchParams({ offset: idoOffset, limit: 20 });
   let endpoint = "/api/idosell/products";
   const vm = $("idoViewMode").value;
   $("idoState").classList.toggle("hidden", vm !== "mine");
-  if (vm === "needs") {
+  if (idoSeriesFilter) {            // caly model - ignoruj pozostale filtry
+    params.set("series", idoSeriesFilter.id);
+    params.set("sort", $("idoSort").value);
+  } else if (vm === "needs") {
     endpoint = "/api/idosell/scan/results";
   } else {
     const q = $("idoSearch").value.trim();
@@ -1997,6 +2007,7 @@ async function loadIdoProducts(reset) {
             : (p.processed ? `<span class="badge done">✓ obrobione</span>` : "")}
           ${p.plan && !p.processed && !p.executed ? `<span class="badge">📋 plan</span>` : ""}
           ${p.flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ QA</span>` : ""}
+          ${p.series_id ? `<span class="badge" style="cursor:pointer;color:var(--accent2)" onclick="loadSeries('${esc(p.series_id)}', '${esc((p.series_name||'').replace(/'/g,''))}')" title="Pokaż cały model (serię IdoSell) - szybki check czy wszystkie warianty zrobione">📦 ${esc(p.series_name || ("seria " + p.series_id))}</span>` : ""}
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-ghost" style="flex:1" onclick="processIdoProduct('${esc(p.id)}', this)">🪄 Obrób zdjęcia</button>
@@ -2007,13 +2018,19 @@ async function loadIdoProducts(reset) {
   $("idoProducts").innerHTML = html || `<div class="empty">Brak produktów</div>`;
   idoOffset += data.products.length;
   $("idoMoreBtn").classList.toggle("hidden", idoOffset >= data.total);
-  // podsumowanie listy (np. po wyszukaniu modelu - czy cala seria zrobiona)
+  // podsumowanie listy (np. po wejsciu w model/serie - czy caly zrobiony)
   const su = data.summary;
   const allDone = su && su.shown > 0 && su.processed === su.shown;
-  $("idoSummary").innerHTML = su
-    ? `Na liście: <b>${su.shown}</b> · obrobione <b style="color:var(--ok)">${su.processed}</b> · wysłane <b style="color:var(--ok)">${su.executed}</b>`
-      + (allDone ? ` · <b style="color:var(--ok)">✓ cała seria obrobiona</b>` : "")
-      + (data.total > su.shown ? ` <span style="opacity:.7">(dotyczy widocznych ${su.shown} z ${data.total})</span>` : "")
+  const chip = idoSeriesFilter
+    ? `<span class="badge" style="color:var(--accent2)">📦 Model: ${esc(data.series_name || idoSeriesFilter.name)}</span>
+       <a href="#" onclick="exitSeries();return false" style="margin-left:8px;color:var(--muted)">× pokaż wszystkie</a> &nbsp; `
+    : "";
+  $("idoSummary").innerHTML = (chip || su)
+    ? chip + (su
+        ? `Na liście: <b>${su.shown}</b> · obrobione <b style="color:var(--ok)">${su.processed}</b> · wysłane <b style="color:var(--ok)">${su.executed}</b>`
+          + (allDone ? ` · <b style="color:var(--ok)">✓ ${idoSeriesFilter ? "cały model" : "cała seria"} zrobiony</b>` : "")
+          + (data.total > su.shown ? ` <span style="opacity:.7">(widoczne ${su.shown} z ${data.total})</span>` : "")
+        : "")
     : "";
 }
 
