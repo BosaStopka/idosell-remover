@@ -513,7 +513,8 @@
         <button class="btn btn-ghost" id="idoScanBtn">🔍 Skanuj tła produktów</button>
         <span id="idoScanInfo" style="font-size:13px;color:var(--muted)"></span>
         <button class="btn btn-ghost" id="idoSelectAll" title="Zaznacz wszystkie widoczne produkty (np. cała seria/model po wyszukaniu)">☑ Zaznacz widoczne</button>
-        <button class="btn btn-primary hidden" id="idoBatchBtn">🪄 Obrób zaznaczone</button>
+        <button class="btn btn-primary hidden" id="idoBatchBtn" title="Otwiera wybór zdjęć PO KOLEI dla każdego - decydujesz co obrobić/zostawić/usunąć">🪄 Obrób zaznaczone</button>
+        <button class="btn btn-ghost hidden" id="idoBatchAllBtn" title="Obrób WSZYSTKIE zdjęcia zaznaczonych bez okna wyboru (szybko, do dużych paczek)">⚡ bez wyboru</button>
         <button class="btn btn-ghost hidden" id="idoRollbackBtn" style="color:var(--err);border-color:var(--err)" title="Przywróć zaznaczone produkty z backupu na dysku (cofa wysyłkę - działa kiedykolwiek)">↩ Cofnij zaznaczone</button>
         <label style="font-size:13px;color:var(--muted);display:flex;align-items:center;gap:5px" title="Ukryj produkty, które mają już lokalne wyniki (obrobione/wysłane)">
           <input type="checkbox" id="idoHideDone" style="accent-color:var(--accent)"> ukryj obrobione</label>
@@ -1722,16 +1723,31 @@ function toggleIdo(id, on) {
   const btn = $("idoBatchBtn");
   btn.classList.toggle("hidden", !selectedIdo.size);
   btn.textContent = `🪄 Obrób zaznaczone (${selectedIdo.size})`;
+  const ab = $("idoBatchAllBtn");
+  ab.classList.toggle("hidden", !selectedIdo.size);
+  ab.textContent = `⚡ bez wyboru (${selectedIdo.size})`;
   const rb = $("idoRollbackBtn");
   rb.classList.toggle("hidden", !selectedIdo.size);
   rb.textContent = `↩ Cofnij zaznaczone (${selectedIdo.size})`;
 }
 $("idoRollbackBtn").addEventListener("click", () => bulkRollback([...selectedIdo]));
-$("idoBatchBtn").addEventListener("click", async () => {
+$("idoBatchBtn").addEventListener("click", () => {
   const ids = [...selectedIdo];
   if (!ids.length) return;
-  if (!confirm(`Obrobić zdjęcia ${ids.length} produktów? Oryginały trafią do archiwum na D:, a wyniki na dysk (nic nie idzie jeszcze do IdoSell).`)) return;
-  $("idoBatchBtn").disabled = true; $("idoBatchBtn").textContent = "Kolejkowanie...";
+  // tak samo jak przy pojedynczym: okno wyboru zdjec otwiera sie PO KOLEI
+  // dla kazdego produktu (wybierasz obrob/zostaw/usun + ikony + mirror),
+  // a nie wrzuca wszystkiego od razu bez wyboru.
+  if (!confirm(`Otworzy się wybór zdjęć PO KOLEI dla ${ids.length} produktów - w każdym decydujesz co obrobić / zostawić / usunąć. OK?`)) return;
+  batchSource = "idosell";
+  batchQueue = ids;
+  selectedIdo.clear(); toggleIdo("", false);
+  openNextInBatch();
+});
+$("idoBatchAllBtn").addEventListener("click", async () => {
+  const ids = [...selectedIdo];
+  if (!ids.length) return;
+  if (!confirm(`Obrobić WSZYSTKIE zdjęcia ${ids.length} produktów bez okna wyboru? Oryginały trafią do archiwum na D:, wyniki na dysk (nic nie idzie jeszcze do IdoSell).`)) return;
+  $("idoBatchAllBtn").disabled = true; $("idoBatchAllBtn").textContent = "Kolejkowanie...";
   const fd = optionsForm(new FormData());
   fd.append("product_ids", JSON.stringify(ids));
   let data;
@@ -1739,7 +1755,7 @@ $("idoBatchBtn").addEventListener("click", async () => {
     const res = await api("/api/idosell/bulk-process", { method: "POST", body: fd });
     data = await res.json();
   } catch { data = { error: "Błąd połączenia" }; }
-  $("idoBatchBtn").disabled = false;
+  $("idoBatchAllBtn").disabled = false;
   if (data.error) { alert(data.error); toggleIdo("", false); return; }
   selectedIdo.clear(); toggleIdo("", false);
   loadIdoProducts(true);
@@ -2075,7 +2091,10 @@ async function processIdoProduct(id, btn) {
     data = await res.json();
   } catch { data = { error: "Błąd połączenia" }; }
   if (btn) { btn.disabled = false; btn.textContent = "🪄 Obrób zdjęcia"; }
-  if (data.error) { alert(data.error); return; }
+  if (data.error) {
+    if (batchQueue.length) { openNextInBatch(); return; }  // w batchu pomin i jedz dalej
+    alert(data.error); return;
+  }
   pickState = {
     offerId: id,
     source: "idosell",
@@ -2185,10 +2204,12 @@ function toggleOffer(id, on) {
 // batch: okno wyboru zdjec otwiera sie PO KOLEI dla kazdej zaznaczonej
 // oferty (wybor obrob/zostaw/usun + kolejnosc), dopiero potem mielenie
 let batchQueue = [];
+let batchSource = "allegro";   // ktore zrodlo otwiera wybor w batchu
 
 $("batchBtn").addEventListener("click", () => {
   batchQueue = [...selectedOffers];
   if (!batchQueue.length) return;
+  batchSource = "allegro";
   selectedOffers.clear();
   toggleOffer("", false);
   openNextInBatch();
@@ -2202,7 +2223,8 @@ function openNextInBatch() {
     document.querySelector('.tab[data-tab="studio"]').click();
     return;
   }
-  processOffer(id, null);
+  // ten sam wybor co przy pojedynczym - wg zrodla batcha (idosell / allegro)
+  (batchSource === "idosell" ? processIdoProduct : processOffer)(id, null);
 }
 
 $("viewMode").addEventListener("change", () => loadOffers(true));
