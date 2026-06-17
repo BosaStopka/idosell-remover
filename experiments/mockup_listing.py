@@ -18,13 +18,24 @@ import pipeline  # noqa: E402
 OUT = Path(__file__).parent.parent / "samples" / "compare"
 OUT.mkdir(parents=True, exist_ok=True)
 
-# miks reprezentujacy balagan: (etykieta, zapytanie, cena)
+# miks reprezentujacy balagan + czysta para Ameko Neo (navy + dino) jako
+# bohaterowie "PO". Pick zrodlo: file=plik z input/ (Twoje zdjecia) ALBO
+# q=text-search ALBO pid+slot (pewne pobranie po ID z katalogu).
+INPUT = Path(__file__).parent.parent / "input"
 PICKS = [
-    ("Xero (landscape biale)", "Xero Scrambler Trail Low WP", "599,00 zl"),
-    ("Evacare (szare 242)", "Evacare Kaky", "249,00 zl"),
-    ("MTNG Apolo (biale kwadrat)", "MTNG Apolo", "399,00 zl"),
-    ("Be Lenka (przezroczyste)", "Be Lenka Synergy", "419,00 zl"),
-    ("Ameko Neo", "Ameko Barefoot Tenisowki Neo", "219,00 zl"),
+    {"label": "Xero (landscape biale)", "q": "Xero Scrambler Trail Low WP",
+     "price": "599,00 zl"},
+    {"label": "Evacare (szare 242)", "q": "Evacare Kaky", "price": "249,00 zl"},
+    {"label": "Be Lenka (przezroczyste)", "q": "Be Lenka Synergy",
+     "price": "419,00 zl"},
+    # navy + dino: WYJATEK - gora = ujecie para/3-4, dol = profil, OBA po
+    # naszej obrobce (porownanie ktory kat lepszy na glowne zdjecie).
+    {"label": "Ameko Neo Navy", "top_file": "image-1781608289982.webp",
+     "bottom_file": "image-1781608305661.webp",
+     "name": "Ameko Barefoot Tenisowki Neo Navy", "price": "219,00 zl"},
+    {"label": "Ameko Neo Dino", "top_file": "image-1781608310793.webp",
+     "bottom_file": "dino_single.webp",
+     "name": "Ameko Barefoot Tenisowki Neo Dino", "price": "219,00 zl"},
 ]
 
 CARD_BG = (236, 238, 242)      # jasnoszare tlo karty (jak sklep)
@@ -93,28 +104,33 @@ def grid_row(cards):
 
 
 print("pobieram + obrabiam produkty...")
-before_cards, after_grey, after_white = [], [], []
-for label, q, price in PICKS:
-    res = ic.search_active("text", q, page=0, limit=1)
+top_cards, bottom_cards = [], []
+for pick in PICKS:
+    price, name = pick["price"], pick.get("name")
+    if pick.get("top_file"):  # navy/dino: gora=para/3-4, dol=profil, OBA obrobione
+        top_img = pipeline.process_bytes((INPUT / pick["top_file"]).read_bytes(), {})
+        bot_img = pipeline.process_bytes((INPUT / pick["bottom_file"]).read_bytes(), {})
+        top_cards.append(card(top_img, price, name, (255, 255, 255)))
+        bottom_cards.append(card(bot_img, price, name, (255, 255, 255)))
+        print(f"  {name[:34]:34} ({pick['label']}) para/3-4 + profil")
+        continue
+    # reszta: text-search, gora=oryginal (jak jest), dol=po obrobce
+    res = ic.search_active("text", pick["q"], page=0, limit=1)
     if not res["products"] or not res["products"][0]["images"]:
-        print("  brak:", q); continue
+        print("  brak:", pick["q"]); continue
     p = res["products"][0]
-    im = p["images"][0]
-    data = ic.download_image(im["url"])
-    orig = Image.open(BytesIO(data))
-    print(f"  {p['id']} {p['name'][:30]:30} ({label})")
-    before_cards.append(card(orig, price, p["name"]))
-    after = pipeline.process_bytes(data, {})   # kwadrat biale + cien
-    after_grey.append(card(after, price, p["name"], CARD_BG))
-    after_white.append(card(after, price, p["name"], (255, 255, 255)))
+    data, name = ic.download_image(p["images"][0]["url"]), p["name"]
+    print(f"  {name[:34]:34} ({pick['label']})")
+    # karta biala (sklep nie ma szarego tla) - gora pokazuje oryginal zdjecia
+    top_cards.append(card(Image.open(BytesIO(data)), price, name, (255, 255, 255)))
+    bottom_cards.append(card(pipeline.process_bytes(data, {}), price, name,
+                             (255, 255, 255)))
 
 rows = [
-    ("PRZED - jak jest teraz (rozne tla, proporcje, skala)", (200, 60, 60),
-     grid_row(before_cards)),
-    ("PO - biale zdjecia na DZISIEJSZEJ szarej karcie (widac 'pudelka')",
-     (210, 130, 30), grid_row(after_grey)),
-    ("PO - biale zdjecia + JASNA karta (rekomendacja - wtapia sie)",
-     (20, 150, 110), grid_row(after_white)),
+    ("GORA - jak jest teraz (navy/dino: ujecie para / 3-4)", (200, 60, 60),
+     grid_row(top_cards)),
+    ("DOL - po standaryzacji na jasnej karcie (navy/dino: profil)",
+     (20, 150, 110), grid_row(bottom_cards)),
 ]
 W = max(r[2].width for r in rows)
 TH = 46
