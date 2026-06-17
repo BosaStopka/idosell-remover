@@ -1287,7 +1287,7 @@ function toggleMirror(i) { pickState.items[i].mirror = !pickState.items[i].mirro
 
 $("pickCancel").addEventListener("click", () => {
   if (batchQueue.length &&
-      !confirm(`Przerwać wybór dla pozostałych ${batchQueue.length} ofert?`)) return;
+      !confirm(`Przerwać wybór dla pozostałych ${batchQueue.length} pozycji?`)) return;
   batchQueue = [];
   $("pickOverlay").classList.add("hidden");
 });
