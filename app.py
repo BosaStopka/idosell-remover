@@ -1426,13 +1426,22 @@ def ido_scan_worker():
 
 
 def ido_local_flags(product_id) -> dict:
-    """Plakietki: czy produkt ma juz wyniki/plan lokalnie + wynik skanu."""
+    """Plakietki: czy produkt ma juz wyniki/plan lokalnie + wynik skanu +
+    czy galeria zostala WYSLANA do IdoSell (executed_at bez rollbacku)."""
     out_dir = DONE_DIR / str(product_id)
     has_results = out_dir.exists() and any(out_dir.glob("*.jpg"))
-    has_plan = (out_dir / "plan.json").exists()
+    plan_file = out_dir / "plan.json"
+    has_plan = plan_file.exists()
+    executed = False
+    if has_plan:
+        try:
+            pl = json.loads(plan_file.read_text(encoding="utf-8"))
+            executed = bool(pl.get("executed_at")) and not pl.get("rolled_back_at")
+        except (json.JSONDecodeError, OSError):
+            pass
     with ido_scan_lock:
         scan = ido_scan_state["results"].get(str(product_id), {})
-    return {"processed": has_results, "plan": has_plan,
+    return {"processed": has_results, "plan": has_plan, "executed": executed,
             "needs": scan.get("needs"), "reasons": scan.get("reasons")}
 
 
@@ -1597,6 +1606,14 @@ def idosell_products():
     season = request.args.get("season", "").strip() or None  # filtr sezonu
     category = request.args.get("category", "").strip() or None  # filtr kategorii
     desc = sort == "id_desc"
+    # Kategoria + KONKRETNY sezon to w API IdoSell OR (nie AND). Gdy oba ustawione,
+    # serwerowo trzymamy kategorie (strict), a sezon dofiltrowujemy nizej po
+    # wyciagnietym parametrze - dzieki temu wynik to twarde AND (best-effort:
+    # total/paginacja przyblizone). 'bez-zimy' to disabled i laczy sie strict.
+    _SPEC = ("wiosna", "lato", "jesien", "zima")
+    _SEASON_PL = {"wiosna": "wiosna", "lato": "lato", "jesien": "jesień", "zima": "zima"}
+    post_season = season if (category and season in _SPEC) else None
+    srv_season = None if post_season else season
     try:
         if view == "mine":
             items = _ido_mine_index(state, query)
@@ -1617,7 +1634,7 @@ def idosell_products():
         if query and query.isdigit():
             # ID: pelne wyszukanie (z fallbackiem do usunietych), cap 50
             data = idosell_client.find_products(query, limit=50, availability=avail,
-                                                season=season, category=category)
+                                                season=srv_season, category=category)
             rows = [_ido_row_ui(p) for p in data["products"]]
             rows.sort(key=lambda r: r["id"], reverse=desc)
             rows = rows[offset:offset + limit]
@@ -1625,14 +1642,14 @@ def idosell_products():
         elif query:
             # nazwa/marka (np. "Bobux") lub kod - paginowane, pelny total
             page_idx = offset // limit
-            res = idosell_client.search_active("text", query, page_idx, limit, avail, season, category)
+            res = idosell_client.search_active("text", query, page_idx, limit, avail, srv_season, category)
             if res["total"] == 0 and page_idx == 0:
-                res = idosell_client.search_active("code", query, 0, limit, avail, season, category)
+                res = idosell_client.search_active("code", query, 0, limit, avail, srv_season, category)
             rows = [_ido_row_ui(p) for p in res["products"]]
             rows.sort(key=lambda r: r["id"], reverse=desc)
             total = res["total"]
         elif desc:
-            total = idosell_client.scan_page(0, 1, availability=avail, season=season,
+            total = idosell_client.scan_page(0, 1, availability=avail, season=srv_season,
                                              category=category)["total"]
             start = max(0, total - offset - limit)
             end = max(0, total - offset)
@@ -1641,7 +1658,7 @@ def idosell_products():
                 p0, p1 = start // limit, (end - 1) // limit
                 for p in range(p0, p1 + 1):
                     asc += idosell_client.scan_page(p, limit, availability=avail,
-                                                    season=season, category=category,
+                                                    season=srv_season, category=category,
                                                     with_attrs=True)["products"]
                 window = list(reversed(asc[start - p0 * limit:end - p0 * limit]))
             else:
@@ -1649,14 +1666,23 @@ def idosell_products():
             rows = [_ido_row_ui(p) for p in window]
         else:
             page = idosell_client.scan_page(offset // limit, limit, availability=avail,
-                                            season=season, category=category, with_attrs=True)
+                                            season=srv_season, category=category, with_attrs=True)
             rows = [_ido_row_ui(p) for p in page["products"]]
             total = page["total"]
     except idosell_client.IdoSellError as e:
         return jsonify({"error": str(e)}), 400
+    if post_season:   # twarde AND kategoria + sezon (API daje OR) - dofiltruj
+        want = _SEASON_PL.get(post_season, post_season)
+        rows = [r for r in rows if want in (r.get("season") or [])]
     for p in rows:
         p.update(ido_local_flags(p["id"]))
-    return jsonify({"products": rows, "total": total})
+    # podsumowanie biezacej listy - "czy model/seria cala zrobiona"
+    summary = {
+        "shown": len(rows),
+        "processed": sum(1 for r in rows if r.get("processed")),
+        "executed": sum(1 for r in rows if r.get("executed")),
+    }
+    return jsonify({"products": rows, "total": total, "summary": summary})
 
 
 @app.get("/api/idosell/products/<int:product_id>/images")

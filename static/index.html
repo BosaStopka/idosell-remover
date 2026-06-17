@@ -512,8 +512,11 @@
       <div class="toolbar" style="align-items:center">
         <button class="btn btn-ghost" id="idoScanBtn">🔍 Skanuj tła produktów</button>
         <span id="idoScanInfo" style="font-size:13px;color:var(--muted)"></span>
+        <button class="btn btn-ghost" id="idoSelectAll" title="Zaznacz wszystkie widoczne produkty (np. cała seria/model po wyszukaniu)">☑ Zaznacz widoczne</button>
         <button class="btn btn-primary hidden" id="idoBatchBtn">🪄 Obrób zaznaczone</button>
         <button class="btn btn-ghost hidden" id="idoRollbackBtn" style="color:var(--err);border-color:var(--err)" title="Przywróć zaznaczone produkty z backupu na dysku (cofa wysyłkę - działa kiedykolwiek)">↩ Cofnij zaznaczone</button>
+        <label style="font-size:13px;color:var(--muted);display:flex;align-items:center;gap:5px" title="Ukryj produkty, które mają już lokalne wyniki (obrobione/wysłane)">
+          <input type="checkbox" id="idoHideDone" style="accent-color:var(--accent)"> ukryj obrobione</label>
         <select id="idoViewMode" style="margin-left:auto">
           <option value="all" selected>Wszystkie produkty (bez tagu Archiwum)</option>
           <option value="needs">Tylko do obróbki (wynik skanu)</option>
@@ -559,6 +562,7 @@
         </select>
         <button class="btn btn-ghost" id="idoSearchBtn">Szukaj</button>
       </div>
+      <div id="idoSummary" style="font-size:13px;color:var(--muted);margin:4px 2px 10px"></div>
       <div id="idoProducts"></div>
       <div style="text-align:center;margin-top:18px">
         <button class="btn btn-ghost hidden" id="idoMoreBtn">Pokaż więcej</button>
@@ -1968,9 +1972,11 @@ async function loadIdoProducts(reset) {
     return;
   }
   let html = reset ? "" : $("idoProducts").innerHTML;
+  const hideDone = $("idoHideDone").checked;
   for (const p of data.products) {
     idoMeta[String(p.id)] = { code: p.code || null, executed: !!p.executed,
                               category: p.category || [], season: p.season || [] };
+    if (hideDone && (p.processed || p.executed)) continue;  // ukryj obrobione/wyslane
     const checked = selectedIdo.has(String(p.id)) ? "checked" : "";
     html += `<div class="card">
       <div class="thumb white">${p.image ? `<img src="${esc(p.image)}" loading="lazy" decoding="async">` : `<span style="font-size:26px">🖼</span>`}
@@ -2001,6 +2007,14 @@ async function loadIdoProducts(reset) {
   $("idoProducts").innerHTML = html || `<div class="empty">Brak produktów</div>`;
   idoOffset += data.products.length;
   $("idoMoreBtn").classList.toggle("hidden", idoOffset >= data.total);
+  // podsumowanie listy (np. po wyszukaniu modelu - czy cala seria zrobiona)
+  const su = data.summary;
+  const allDone = su && su.shown > 0 && su.processed === su.shown;
+  $("idoSummary").innerHTML = su
+    ? `Na liście: <b>${su.shown}</b> · obrobione <b style="color:var(--ok)">${su.processed}</b> · wysłane <b style="color:var(--ok)">${su.executed}</b>`
+      + (allDone ? ` · <b style="color:var(--ok)">✓ cała seria obrobiona</b>` : "")
+      + (data.total > su.shown ? ` <span style="opacity:.7">(dotyczy widocznych ${su.shown} z ${data.total})</span>` : "")
+    : "";
 }
 
 async function processIdoProduct(id, btn) {
@@ -2068,6 +2082,12 @@ $("idoState").addEventListener("change", () => loadIdoProducts(true));
 $("idoAvail").addEventListener("change", () => loadIdoProducts(true));
 $("idoSeason").addEventListener("change", () => loadIdoProducts(true));
 $("idoCategory").addEventListener("change", () => loadIdoProducts(true));
+$("idoHideDone").addEventListener("change", () => loadIdoProducts(true));
+$("idoSelectAll").addEventListener("click", () => {
+  const cbs = document.querySelectorAll("#idoProducts .offer-check");
+  if (!cbs.length) return;
+  cbs.forEach(cb => { if (!cb.checked) { cb.checked = true; toggleIdo(cb.dataset.id, true); } });
+});
 $("idoSearchBtn").addEventListener("click", () => loadIdoProducts(true));
 $("idoSearch").addEventListener("keydown", e => { if (e.key === "Enter") loadIdoProducts(true); });
 $("idoMoreBtn").addEventListener("click", () => loadIdoProducts(false));
