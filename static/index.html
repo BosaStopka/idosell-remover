@@ -513,6 +513,7 @@
         <button class="btn btn-ghost" id="idoScanBtn">🔍 Skanuj tła produktów</button>
         <span id="idoScanInfo" style="font-size:13px;color:var(--muted)"></span>
         <button class="btn btn-primary hidden" id="idoBatchBtn">🪄 Obrób zaznaczone</button>
+        <button class="btn btn-ghost hidden" id="idoRollbackBtn" style="color:var(--err);border-color:var(--err)" title="Przywróć zaznaczone produkty z backupu na dysku (cofa wysyłkę - działa kiedykolwiek)">↩ Cofnij zaznaczone</button>
         <select id="idoViewMode" style="margin-left:auto">
           <option value="all" selected>Wszystkie produkty (bez tagu Archiwum)</option>
           <option value="needs">Tylko do obróbki (wynik skanu)</option>
@@ -809,6 +810,8 @@ $("bulkPushBtn").addEventListener("click", () => {
       Rozumiem, że to zmieni galerie w sklepie (mam backup i rollback per produkt)
     </label>`;
   $("bulkSummary").textContent = `${groups.length} gotowych · ${okCount} bez uwag QA`;
+  const bulkTitle = document.querySelector("#bulkOverlay h2");
+  if (bulkTitle) bulkTitle.textContent = "Wyślij wsadowo do IdoSell";  // reset (rollback zmienia tytul)
   $("bulkGo").classList.remove("hidden");
   $("bulkGo").disabled = true; $("bulkGo").textContent = "📤 Wyślij zaznaczone do IdoSell";
   $("bulkOverlay").classList.remove("hidden");
@@ -840,16 +843,23 @@ $("bulkGo").addEventListener("click", async () => {
   $("bulkGo").classList.add("hidden");
   $("bulkSummary").textContent = "";
   const undoBtn = $("bulkUndo");
-  if (undoBtn) undoBtn.addEventListener("click", () => bulkRollback(sentIds, undoBtn));
+  if (undoBtn) undoBtn.addEventListener("click", () => bulkRollback(sentIds));
   loadIdoProducts(true);
   lastJobsKey = ""; refresh();
 });
 
-// wsadowe cofniecie zapisu (bezpiecznik: szybki powrot do stanu sprzed wysylki)
-async function bulkRollback(ids, btn) {
+// wsadowe cofniecie zapisu (przywrocenie z backupu na dysku) - dziala KIEDYKOLWIEK,
+// tez dla produktow wyslanych w poprzedniej sesji (backup trwa na dysku per produkt).
+// Wynik pokazujemy w modalu wsadowym (z paska produktow modal nie jest otwarty).
+async function bulkRollback(ids) {
   if (!ids || !ids.length) return;
-  if (!confirm(`Cofnąć zapis dla ${ids.length} produktów? Galerie wrócą do stanu sprzed wysyłki (z backupu na dysku).`)) return;
-  if (btn) { btn.disabled = true; btn.textContent = `Cofanie ${ids.length}...`; }
+  if (!confirm(`Cofnąć zapis (przywrócić z backupu) dla ${ids.length} produktów?\nGalerie wrócą do stanu sprzed wysyłki - dane bierzemy z backupu na dysku.`)) return;
+  const title = document.querySelector("#bulkOverlay h2");
+  if (title) title.textContent = "Cofanie zapisu (rollback z backupu)";
+  $("bulkGo").classList.add("hidden");
+  $("bulkSummary").textContent = "";
+  $("bulkBody").innerHTML = `<p style="color:var(--muted)">Cofanie ${ids.length} produktów (przywracanie z backupu)...</p>`;
+  $("bulkOverlay").classList.remove("hidden");
   let data;
   try {
     const res = await api("/api/idosell/bulk-rollback", {
@@ -858,17 +868,14 @@ async function bulkRollback(ids, btn) {
     });
     data = await res.json();
   } catch { data = { error: "Błąd połączenia" }; }
-  if (data.error) {
-    alert(data.error);
-    if (btn) { btn.disabled = false; btn.textContent = `↩ Cofnij wszystkie wysłane (${ids.length})`; }
-    return;
-  }
+  if (data.error) { $("bulkBody").innerHTML = `<p style="color:var(--err);font-size:14px">${esc(data.error)}</p>`; return; }
   const rows = (data.results || []).map(r =>
     `<div style="font-size:12.5px;padding:3px 0;color:${r.ok ? (r.verified === false ? "#ff8a3d" : "var(--ok)") : "var(--err)"}">
       ID ${esc(r.id)}: ${r.ok ? (r.verified === false ? "⚠ cofnięte, weryfikacja niezgodna" : `✓ cofnięte (${r.restored} zdjęć)`) : "✗ " + esc(r.error || "")}
     </div>`).join("");
-  $("bulkBody").innerHTML = `<p style="color:var(--ok);font-size:15px">↩ Cofnięto ${data.ok}/${data.ok + data.failed} produktów.</p>
+  $("bulkBody").innerHTML = `<p style="color:var(--ok);font-size:15px">↩ Cofnięto ${data.ok}/${data.ok + data.failed} produktów (z backupu).</p>
     <div style="max-height:320px;overflow:auto;margin-top:10px">${rows}</div>`;
+  selectedIdo.clear(); toggleIdo("", false);
   loadIdoProducts(true);
   lastJobsKey = ""; refresh();
 }
@@ -1682,7 +1689,11 @@ function toggleIdo(id, on) {
   const btn = $("idoBatchBtn");
   btn.classList.toggle("hidden", !selectedIdo.size);
   btn.textContent = `🪄 Obrób zaznaczone (${selectedIdo.size})`;
+  const rb = $("idoRollbackBtn");
+  rb.classList.toggle("hidden", !selectedIdo.size);
+  rb.textContent = `↩ Cofnij zaznaczone (${selectedIdo.size})`;
 }
+$("idoRollbackBtn").addEventListener("click", () => bulkRollback([...selectedIdo]));
 $("idoBatchBtn").addEventListener("click", async () => {
   const ids = [...selectedIdo];
   if (!ids.length) return;
