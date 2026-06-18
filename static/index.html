@@ -492,6 +492,7 @@
         <button class="btn btn-primary" id="bulkPushBtn" style="margin-left:auto">📤 Wyślij gotowe do IdoSell</button>
         <label class="qa-filter"><input type="checkbox" id="qaOnly"> ⚠ Tylko z uwagami QA</label>
         <label class="qa-filter"><input type="checkbox" id="hideSent"> 🙈 Ukryj wysłane</label>
+        <label class="qa-filter"><input type="checkbox" id="lowOnly"> ⚠ Tylko małe źródło</label>
         <select id="studioCat" title="Filtr po kategorii (Rodzaj z IdoSell)" style="font-size:12px">
           <option value="">Kategoria: wszystkie</option>
           <option value="sandały">sandały</option>
@@ -777,6 +778,22 @@ async function flipPhoto(jobId) {
   } catch { alert("Błąd połączenia"); }
 }
 
+// podmiana zrodla na lepsze zdjecie z linku (np. wyzsza rozdzielczosc) + re-obrobka
+async function replaceUrl(jobId) {
+  const url = prompt("Wklej link (URL) do lepszego zdjęcia TEGO SAMEGO produktu (np. wyższa rozdzielczość):");
+  if (!url) return;
+  let data;
+  try {
+    const res = await api(`/api/jobs/${jobId}/replace-url`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: url.trim() }),
+    });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); return; }
+  startPolling();   // nowe zrodlo (${data.w}x${data.h}) w obrobce
+}
+
 // ---------- przetwarzanie ----------
 goBtn.addEventListener("click", async () => {
   if (!pending.length) return;
@@ -791,6 +808,7 @@ goBtn.addEventListener("click", async () => {
 });
 $("qaOnly").addEventListener("change", e => { qaOnly = e.target.checked; render(); });
 $("hideSent").addEventListener("change", e => { hideSent = e.target.checked; render(); });
+$("lowOnly").addEventListener("change", e => { lowOnly = e.target.checked; render(); });
 $("studioCat").addEventListener("change", e => { studioCat = e.target.value; render(); });
 $("studioSeason").addEventListener("change", e => { studioSeason = e.target.value; render(); });
 $("stopBtn").addEventListener("click", async () => {
@@ -993,7 +1011,7 @@ const STATUS = {
 };
 
 const QA_LBL = { tlo: "tło", maly: "za mały", proporcje: "proporcje", fragmenty: "fragmenty", pusta: "pusta maska" };
-let qaOnly = false, hideSent = false, studioCat = "", studioSeason = "";
+let qaOnly = false, hideSent = false, studioCat = "", studioSeason = "", lowOnly = false;
 let studioSeries = "", studioSeriesName = "";   // filtr po serii (modelu) w Studio
 function setStudioSeries(id, name) { studioSeries = String(id); studioSeriesName = name || ("seria " + id); render(); }
 function clearStudioSeries() { studioSeries = ""; studioSeriesName = ""; render(); }
@@ -1062,6 +1080,7 @@ function render() {
     const doneCount = gjobs.filter(j => j.status === "done").length;
     const flagged = gjobs.filter(j => j.status === "done" && j.qa && !j.qa.ok).length;
     if (qaOnly && !flagged) continue;   // filtr: tylko grupy z uwagami QA
+    if (lowOnly && !gjobs.some(j => j.lowres)) continue;   // tylko grupy z malym zrodlem
     const meta = idoMeta[pid] || {};
     if (hideSent && meta.executed) continue;   // ukryj produkty juz wyslane
     if (studioSeries && String(meta.series_id || "") !== studioSeries) continue;  // filtr po serii
@@ -1118,11 +1137,13 @@ function render() {
             <span class="badge ${cls}">${label}${j.seconds ? " · " + j.seconds + "s" : ""}</span>
             ${j.status === "done" && j.qa && !j.qa.ok ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d" title="Auto-kontrola jakości">⚠ ${j.qa.issues.map(x => QA_LBL[x] || x).join(", ")}</span>` : ""}
             ${j.status === "done" && j.qa && j.qa.ok ? `<span class="badge" style="color:var(--ok)" title="Auto-kontrola jakości OK">✓ QA</span>` : ""}
+            ${j.lowres ? `<span class="badge" style="color:#ffd166;border:1px solid #ffd166" title="Małe źródło - po powiększeniu może być miękkie. Wskaż lepsze przez 🔗 Zamień (link)">⚠ małe źródło ${j.src_w}×${j.src_h}</span>` : ""}
           </div>
-          <div style="display:flex;gap:10px;align-items:center">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             ${j.status === "done" ? `<a href="/done/${j.result}" download>Pobierz JPG</a>` : ""}
             ${canRetry ? `<a href="#" onclick="retryJob('${j.id}', this); return false" title="Obrob ponownie z aktualnymi ustawieniami">↻ Ponów</a>` : ""}
             ${j.status === "done" ? `<a href="#" onclick="flipPhoto('${j.id}'); return false" title="Odbij lustrzanie gotowego zdjęcia (kierunek noska) - bez ponownej obróbki">⇄ Odbij</a>` : ""}
+            ${(j.status === "done" || j.status === "error") && j.orig ? `<a href="#" onclick="replaceUrl('${j.id}'); return false" title="Podmień źródło na lepsze zdjęcie z linku (np. wyższa rozdzielczość) i przerób ponownie">🔗 Zamień (link)</a>` : ""}
           </div>
           ${j.source === "idosell" && j.status === "done" && j.pid ? `
           <div class="order-row" style="margin-top:6px">

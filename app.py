@@ -52,6 +52,7 @@ lock = threading.Lock()
 inference_busy = threading.Event()  # gdy ustawione, skan tla pauzuje
 low_ram_pause = threading.Event()   # obrobka wstrzymana - za malo RAM
 MIN_RAM_GB = 1.2                    # prog wstrzymania obrobki
+LOWRES_MAX_PX = 800                 # zrodlo ponizej tego (dluzszy bok) = "male zrodlo"
 
 
 def free_ram_gb() -> float:
@@ -390,6 +391,26 @@ def api_jobs():
             o["gallery_pos"] = next((i for i, d in enumerate(decs)
                                      if d.get("index") == idx), None)
             o["gallery_len"] = len(decs)
+    # rozmiar zrodla (oryginalu) + flaga "male zrodlo" - liczony raz, cache na zadaniu
+    from PIL import Image as _Img
+    for o in out:
+        if o.get("status") != "done" or not o.get("orig"):
+            continue
+        jid = o["id"]
+        with lock:
+            job = jobs.get(jid) or {}
+            sw, sh = job.get("src_w"), job.get("src_h")
+        if sw is None:
+            try:
+                with _Img.open(ORIGINALS_DIR / o["orig"]) as im:
+                    sw, sh = im.size
+            except Exception:
+                sw, sh = 0, 0
+            with lock:
+                if jid in jobs:
+                    jobs[jid]["src_w"], jobs[jid]["src_h"] = sw, sh
+        o["src_w"], o["src_h"] = sw, sh
+        o["lowres"] = bool(sw and sh and max(sw, sh) < LOWRES_MAX_PX)
     return jsonify(out)
 
 
@@ -471,6 +492,50 @@ def api_flip(job_id):
         mirror = opts["mirror"]
     persist_jobs()
     return jsonify({"ok": True, "mirror": mirror, "rev": job["rev"]})
+
+
+@app.post("/api/jobs/<job_id>/replace-url")
+def api_replace_url(job_id):
+    """Podmiana ZRODLA zadania na obraz spod URL (np. ta sama fotka w wyzszej
+    rozdzielczosci, wskazana recznie) i ponowna obrobka w miejscu - zachowuje
+    opcje/mirror. Bezpieczne: to UZYTKOWNIK wskazuje wlasciwy link, wiec nie ma
+    ryzyka zlego dopasowania."""
+    from io import BytesIO
+
+    import requests as rq
+    from PIL import Image
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return jsonify({"error": "Podaj poprawny adres http(s)"}), 400
+    with lock:
+        job = jobs.get(job_id)
+        if not job or not job.get("orig"):
+            return jsonify({"error": "Brak zadania lub oryginalu"}), 404
+        if job.get("status") in ("queued", "processing"):
+            return jsonify({"error": "Zadanie juz jest w kolejce"}), 409
+        orig = job["orig"]
+        options = dict(job.get("options") or {})
+    try:
+        resp = rq.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code != 200:
+            return jsonify({"error": f"Pobranie nieudane ({resp.status_code})"}), 400
+        content = resp.content
+        with Image.open(BytesIO(content)) as im:   # walidacja: czy to obraz
+            w, h = im.size
+    except Exception as e:
+        return jsonify({"error": f"Nie udalo sie pobrac obrazu: {e}"}), 400
+    try:
+        (ORIGINALS_DIR / orig).write_bytes(content)
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    with lock:
+        job.update(status="queued", error=None, result=None, seconds=None,
+                   data=None, options=options)
+        job["src_w"], job["src_h"] = w, h
+    queue.put(job_id)
+    persist_jobs()
+    return jsonify({"ok": True, "w": w, "h": h})
 
 
 @app.post("/api/jobs/stop")
