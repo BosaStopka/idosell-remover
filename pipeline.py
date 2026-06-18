@@ -15,8 +15,8 @@ DEFAULTS = {
     #                          wypelniaja kadr; wyzsze = wiecej rozmycia)
     "shadow": True,          # cien wlaczony (master)
     "shadow_mode": "auto",   # auto | preserve | minimal | none - patrz compose()
-    "shadow_opacity": 0.24,  # krycie MINIMALNEGO cienia kontaktowego (gdy brak realnego)
-    "shadow_blur": 11,       # (zachowane dla zgodnosci UI; minimal liczy blur z wysokosci)
+    "shadow_opacity": 0.30,  # krycie cienia-kaluzy (tryb minimal, gdy brak realnego)
+    "shadow_blur": 11,       # (zachowane dla zgodnosci UI; kaluza liczy blur z wiekszego wymiaru)
     "shadow_detect_drop": 6.0,  # o ile pas pod podeszwa ciemniejszy od tla = realny cien
     "preserve_plate_pct": 88,   # percentyl jasnosci tla -> punkt bieli przy ZACHOWAJ
     "colors": True,          # podbicie kolorow (delikatne, naturalne)
@@ -273,35 +273,45 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
     ow, oh = rgba.size
     ox, oy = (size[0] - ow) // 2, (size[1] - oh) // 2
     if shadow_on and mode != "none":
-        # cienka linia kontaktu: sylwetka zsunieta minimalnie + maly blur.
-        # SKALA z wiekszego wymiaru (nie samej wysokosci) - inaczej szerokie
-        # niskie obiekty (np. para butow w poziomie) dostawaly cien tak cienki,
-        # ze niewidoczny; wysokie - wyrazny. Teraz spojnie dla obu.
+        # CIEN-KALUZA pod sladem buta: miekkie uziemienie, ktore PLYNNIE zanika
+        # w dol (reach) ORAZ na skrajnym lewym/prawym koncu (pieta/nosek) - bez
+        # pionowej kreski. Sylwetkowy cienki cien dawal za malo dla profilu z
+        # cienka podeszwa i ostra krawedz na bokach; kaluza jest spojna dla
+        # profilu, pary i frontu. Skala z wiekszego wymiaru (od).
         import numpy as np
         from scipy import ndimage
         alpha = rgba.split()[3]
         op = float(opt["shadow_opacity"])
         od = max(ow, oh)
-        off = max(6, int(od * 0.012))
-        blur = max(6, int(od * 0.011))
-        layer = Image.new("L", size, 0)
-        layer.paste(alpha, (ox, oy + off))
-        layer = layer.filter(ImageFilter.GaussianBlur(blur))
-        layer = layer.point(lambda v: int(v * op))
-        # cien KONTAKTOWY: zostawiamy go TYLKO ponizej dolnej krawedzi produktu
-        # w danej kolumnie. Inaczej zsunieta+rozmyta sylwetka obrysowuje rowniez
-        # GORE i BOKI ("cien/halo na gorze", zwlaszcza przy ukosnych ksztaltach
-        # i bladych produktach) - a takze nie przebija przez otwory (sandal).
+        blur = max(6, int(od * 0.012))
         a_bin = ndimage.binary_fill_holes(np.asarray(alpha) > 40)
         prod = np.zeros((size[1], size[0]), dtype=bool)
         prod[oy:oy + oh, ox:ox + ow] = a_bin
         col_has = prod.any(axis=0)
-        bottom = (size[1] - 1) - np.flip(prod, axis=0).argmax(axis=0)  # najnizszy wiersz/kol.
-        yy = np.arange(size[1])[:, None]
-        allow = col_has[None, :] & (yy > bottom[None, :])   # tylko pod produktem
-        layer_arr = np.asarray(layer).copy()
-        layer_arr[~allow] = 0
-        layer = Image.fromarray(layer_arr, "L")
+        bottom = (size[1] - 1) - np.flip(prod, axis=0).argmax(axis=0)
+        cols = np.arange(size[0])
+        # dolna krawedz (kontakt) per kolumna; w kolumnach bez produktu wypelnij
+        # interpolacja (ciaglosc), by zanik byl gladki przez konce
+        bottom_f = (np.interp(cols, cols[col_has], bottom[col_has]).astype(np.float32)
+                    if col_has.any() else bottom.astype(np.float32))
+        yy = np.arange(size[1])[:, None].astype(np.float32)
+        reach = max(blur * 4.0, od * 0.06)          # jak daleko cien siega w dol
+        dist = yy - bottom_f[None, :]               # >0 ponizej kontaktu
+        pool = np.clip(1.0 - dist / reach, 0.0, 1.0) * (dist > -blur)
+        pool = pool ** 1.4                          # ciemniej przy kontakcie
+        # PLYNNE wygaszanie POZIOME na koncach (pieta/nosek): szeroki blur
+        # "sladu" kolumn - zamiast twardego ucinania na granicy produktu
+        colw = ndimage.gaussian_filter1d(col_has.astype(np.float32), sigma=blur * 3.0)
+        colw = np.clip(colw / max(float(colw.max()), 1e-6), 0.0, 1.0)
+        pool *= colw[None, :]
+        # finalne zmiekczenie - mocniej w poziomie niz w pionie (gladkie boki)
+        pool = ndimage.gaussian_filter(pool, sigma=(blur * 0.8, blur * 2.0))
+        # NIE odejmujemy maski produktu: cien ma dochodzic AZ do podeszwy (bez
+        # bialego paska miedzy butem a cieniem). Produkt nakladamy na wierzch,
+        # wiec cien pod nim i tak jest zakryty, a kaluza istnieje tylko przy
+        # linii kontaktu (dist > -blur) - przez otwory sandala nie przebija.
+        layer = Image.fromarray(
+            np.clip(pool * (op * 255.0), 0, 255).astype(np.uint8), "L")
         black = Image.new("RGBA", size, (0, 0, 0, 255))
         black.putalpha(layer)
         canvas.alpha_composite(black)
