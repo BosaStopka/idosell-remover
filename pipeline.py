@@ -288,15 +288,19 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
         layer.paste(alpha, (ox, oy + off))
         layer = layer.filter(ImageFilter.GaussianBlur(blur))
         layer = layer.point(lambda v: int(v * op))
-        # cien NIE moze przebijac przez wewnetrzne otwory (np. sandal) ani spod
-        # produktu: zeruj go tam, gdzie pada WYPELNIONA sylwetka buta (otwory
-        # zamkniete) na jej wlasnej pozycji - zostaje tylko smuga kontaktu
-        # ponizej/obok krawedzi, a przez otwory widac biel jak w oryginale.
-        occ = np.zeros((size[1], size[0]), dtype=bool)
+        # cien KONTAKTOWY: zostawiamy go TYLKO ponizej dolnej krawedzi produktu
+        # w danej kolumnie. Inaczej zsunieta+rozmyta sylwetka obrysowuje rowniez
+        # GORE i BOKI ("cien/halo na gorze", zwlaszcza przy ukosnych ksztaltach
+        # i bladych produktach) - a takze nie przebija przez otwory (sandal).
         a_bin = ndimage.binary_fill_holes(np.asarray(alpha) > 40)
-        occ[oy:oy + oh, ox:ox + ow] = a_bin
+        prod = np.zeros((size[1], size[0]), dtype=bool)
+        prod[oy:oy + oh, ox:ox + ow] = a_bin
+        col_has = prod.any(axis=0)
+        bottom = (size[1] - 1) - np.flip(prod, axis=0).argmax(axis=0)  # najnizszy wiersz/kol.
+        yy = np.arange(size[1])[:, None]
+        allow = col_has[None, :] & (yy > bottom[None, :])   # tylko pod produktem
         layer_arr = np.asarray(layer).copy()
-        layer_arr[occ] = 0
+        layer_arr[~allow] = 0
         layer = Image.fromarray(layer_arr, "L")
         black = Image.new("RGBA", size, (0, 0, 0, 255))
         black.putalpha(layer)
