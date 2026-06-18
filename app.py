@@ -569,6 +569,56 @@ def api_recompose(job_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.post("/api/jobs/recompose-all")
+def api_recompose_all():
+    """Hurtowe przeliczenie WSZYSTKICH gotowych zadan poprawionym pipeline,
+    BEZ modelu - z zapisanych masek (masks/{id}.rgb=oryginal z tlem + .a=maska).
+    Uzywa compose(..., src_rgb=oryginal), wiec wiernie odtwarza finalny etap
+    (cien ZACHOWAJ / full-bleed jak w oryginale), tylko z aktualnym kodem
+    (np. poprawiona biel). Nadpisuje pliki wynikow, podbija rev, liczy QA.
+    Nic nie idzie do sklepu - tylko lokalne pliki done/."""
+    from PIL import Image
+    with lock:
+        ids = [jid for jid in job_order
+               if jobs[jid].get("status") == "done" and jobs[jid].get("result")]
+    done = skipped = errors = 0
+    for jid in ids:
+        rgb_p = MASKS_DIR / f"{jid}.rgb.jpg"
+        a_p = MASKS_DIR / f"{jid}.a.png"
+        if not (rgb_p.exists() and a_p.exists()):
+            skipped += 1
+            continue
+        with lock:
+            job = jobs.get(jid)
+            if not job:
+                continue
+            options = dict(job.get("options") or {})
+            rel = job.get("result")
+        try:
+            src = Image.open(rgb_p).convert("RGB")
+            alpha = Image.open(a_p).convert("L")   # maska juz po refine (zapis workera)
+            rgba = src.convert("RGBA")
+            rgba.putalpha(alpha)
+            img = pipeline.compose(rgba, {**pipeline.DEFAULTS, **options}, src_rgb=src)
+            out_path = DONE_DIR / rel
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            img.save(out_path, "JPEG", quality=95)
+            try:
+                qa = qa_check(img, alpha, pipeline.is_full_bleed(rgba))
+            except Exception:
+                qa = None
+            with lock:
+                job["rev"] = (job.get("rev") or 0) + 1
+                if qa is not None:
+                    job["qa"] = qa
+            done += 1
+        except Exception:
+            errors += 1
+    persist_jobs()
+    return jsonify({"recomposed": done, "skipped": skipped, "errors": errors,
+                    "total": len(ids)})
+
+
 # ---------------- wyrownanie barw galerii (rozne sesje zdjeciowe) ----------------
 
 COLOR_CAP_CHROMA = 10   # maks. przesuniecie Cb/Cr

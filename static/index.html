@@ -487,6 +487,7 @@
       <div class="toolbar">
         <button class="btn btn-ghost" id="zipBtn">⬇ Pobierz wszystko (ZIP)</button>
         <button class="btn btn-ghost" id="clearBtn">🧹 Wyczyść zakończone</button>
+        <button class="btn btn-ghost" id="recomposeAllBtn" title="Zastosuj poprawiony pipeline (np. korekta bieli) do wszystkich obrobionych - bez modelu, z masek. Nadpisuje wyniki lokalnie.">♻ Przelicz ponownie (bez modelu)</button>
         <button class="btn btn-ghost hidden" id="stopBtn" style="color:var(--err);border-color:var(--err)">⏹ Stop kolejki</button>
         <button class="btn btn-primary" id="bulkPushBtn" style="margin-left:auto">📤 Wyślij gotowe do IdoSell</button>
         <label class="qa-filter"><input type="checkbox" id="qaOnly"> ⚠ Tylko z uwagami QA</label>
@@ -935,6 +936,20 @@ async function bulkRollback(ids) {
 $("zipBtn").addEventListener("click", () => location.href = "/api/zip");
 $("clearBtn").addEventListener("click", async () => {
   await api("/api/clear", { method: "POST" }); refresh();
+});
+$("recomposeAllBtn").addEventListener("click", async () => {
+  if (!confirm("Przeliczyć ponownie WSZYSTKIE obrobione zdjęcia aktualnym pipeline (np. poprawka bieli)?\nBez modelu, z zapisanych masek - nadpisze pliki wyników lokalnie (nic nie idzie do sklepu).")) return;
+  const btn = $("recomposeAllBtn");
+  btn.disabled = true; btn.textContent = "♻ Przeliczanie...";
+  let data;
+  try {
+    const res = await api("/api/jobs/recompose-all", { method: "POST" });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  btn.disabled = false; btn.textContent = "♻ Przelicz ponownie (bez modelu)";
+  if (data.error) { alert(data.error); return; }
+  alert(`Przeliczono ${data.recomposed} z ${data.total} (pominięto bez masek: ${data.skipped}, błędy: ${data.errors}).`);
+  lastJobsKey = ""; refresh();   // przerysuj miniatury ze swiezym rev
 });
 
 // ---------- stan zadan ----------
