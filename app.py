@@ -2061,10 +2061,30 @@ def _ido_process_default(product_id: int, options: dict) -> dict:
     if not images:
         return {"ok": False, "error": "produkt bez zdjec", "jobs": 0}
 
-    decisions = [{"index": i + 1, "image_id": im["id"], "slot": im["slot"],
-                  "url": im["url"], "action": "process", "mirror": False,
-                  "icons": ["shop", "group"] if i == 0 else []}
-                 for i, im in enumerate(images)]
+    # pobierz raz, wykryj fashion (kolorowe/zlozone tlo) - jak w oknie wyboru:
+    # fashion -> "keep" (zostaw, NIE obrabiaj); reszta -> "process" + kolejka.
+    decisions, jobs_made, kept = [], 0, 0
+    for i, im in enumerate(images):
+        try:
+            data = idosell_client.download_image(im["url"])
+        except idosell_client.IdoSellError:
+            data = None
+        is_fashion = False
+        if data:
+            try:
+                is_fashion = analyze_thumb(data)["white"] < 0.40
+            except Exception:
+                is_fashion = False
+        action = "keep" if is_fashion else "process"
+        decisions.append({"index": i + 1, "image_id": im["id"], "slot": im["slot"],
+                          "url": im["url"], "action": action, "mirror": False,
+                          "icons": ["shop", "group"] if i == 0 else []})
+        if action == "process" and data:
+            submit_job(f"{product_id}_{i + 1}.jpg", data,
+                       {**options, "mirror": False}, source="idosell")
+            jobs_made += 1
+        elif action == "keep":
+            kept += 1
     out_dir = DONE_DIR / str(product_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "plan.json").write_text(json.dumps({
@@ -2072,18 +2092,8 @@ def _ido_process_default(product_id: int, options: dict) -> dict:
         "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "decisions": decisions,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    jobs_made = 0
-    for d in decisions:
-        try:
-            data = idosell_client.download_image(d["url"])
-        except idosell_client.IdoSellError:
-            continue
-        submit_job(f"{product_id}_{d['index']}.jpg", data,
-                   {**options, "mirror": False}, source="idosell")
-        jobs_made += 1
-    return {"ok": jobs_made > 0, "jobs": jobs_made,
-            "error": None if jobs_made else "nie pobrano zdjec"}
+    return {"ok": bool(decisions), "jobs": jobs_made, "kept": kept,
+            "error": None if decisions else "nie pobrano zdjec"}
 
 
 @app.post("/api/idosell/bulk-process")
