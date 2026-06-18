@@ -1984,6 +1984,42 @@ def idosell_product_images(product_id):
     return jsonify({"images": images, "suggestions": suggestions})
 
 
+def _reset_product_jobs(product_id) -> None:
+    """Usuwa STARE zadania danego produktu przed ponowna obrobka - inaczej w
+    Studio wisza duplikaty kart (kazda obrobka tworzy nowy job_id na ten sam
+    plik), a zdjecia zmienione na 'keep'/'delete' zostawiaja stara wycieta
+    wersje. Czysci wpisy zadan + ich pliki robocze (masks/originals) + stare
+    obrobione pliki done/{pid}/{pid}_*.jpg."""
+    pid = str(product_id)
+    removed = []
+    with lock:
+        rem = [jid for jid in list(job_order)
+               if jobs.get(jid) and jobs[jid].get("source") == "idosell"
+               and extract_product_id(Path(jobs[jid].get("name", "")).stem) == pid]
+        for jid in rem:
+            j = jobs.pop(jid, None)
+            if jid in job_order:
+                job_order.remove(jid)
+            removed.append((jid, (j or {}).get("orig")))
+    for jid, orig in removed:
+        try:
+            if orig:
+                (ORIGINALS_DIR / orig).unlink(missing_ok=True)
+            (MASKS_DIR / f"{jid}.rgb.jpg").unlink(missing_ok=True)
+            (MASKS_DIR / f"{jid}.a.png").unlink(missing_ok=True)
+        except OSError:
+            pass
+    d = DONE_DIR / pid
+    if d.exists():
+        for f in d.glob(f"{pid}_*.jpg"):
+            try:
+                f.unlink(missing_ok=True)
+            except OSError:
+                pass
+    if removed:
+        persist_jobs()
+
+
 @app.post("/api/idosell/products/<int:product_id>/process")
 def idosell_product_process(product_id):
     """Wykonuje decyzje per zdjecie: 'process' -> kolejka obrobki,
@@ -1992,6 +2028,7 @@ def idosell_product_process(product_id):
     # pierwsze dotkniecie produktu: trwale archiwum oryginalow na dysk D:
     # (idempotentne - kolejne wejscia nic nie nadpisuja)
     archive = archive_originals(product_id)
+    _reset_product_jobs(product_id)   # ponowna obrobka: skasuj stare zadania
     options = parse_options(request.form)
     try:
         decisions = json.loads(request.form.get("decisions", "[]"))
@@ -2054,6 +2091,7 @@ def _ido_process_default(product_id: int, options: dict) -> dict:
     zdjecia 'Obrob', zdjecie #1 -> ikona Listy + Grupy. Archiwum + plan +
     kolejka. Zwraca {ok, jobs, error}."""
     archive_originals(product_id)
+    _reset_product_jobs(product_id)   # ponowna obrobka: skasuj stare zadania
     try:
         images = idosell_client.get_product_images(product_id)
     except idosell_client.IdoSellError as e:
