@@ -11,7 +11,8 @@ _session = None
 DEFAULTS = {
     "size": 1600,            # bok kwadratu wyjsciowego
     "padding": 0.90,         # maks. udzial produktu w kadrze
-    "max_upscale": 3.0,      # maks. powiekszenie malych zdjec
+    "max_upscale": 4.5,      # maks. powiekszenie malych zdjec (4.5: male zrodla
+    #                          wypelniaja kadr; wyzsze = wiecej rozmycia)
     "shadow": True,          # cien wlaczony (master)
     "shadow_mode": "auto",   # auto | preserve | minimal | none - patrz compose()
     "shadow_opacity": 0.24,  # krycie MINIMALNEGO cienia kontaktowego (gdy brak realnego)
