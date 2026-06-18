@@ -116,18 +116,21 @@ def is_full_bleed(rgba: Image.Image) -> bool:
 
 
 def whiten_neutral(rgba: Image.Image) -> Image.Image:
-    """Jasne NEUTRALNE piksele produktu (szara/biala podeszwa) ciagnie ku
-    bieli; kolorowe (granat, czerwien) nietkniete - wysokie nasycenie je
-    chroni. Tlo (alpha=0) pomijane."""
+    """Tylko NIEMAL biale piksele produktu (biala/szara podeszwa, wkladka)
+    ciagnie ku bieli. Pastele i jasne kolory (rozowy, bezowy, kremowy) maja
+    male, ale WYRAZNE nasycenie (sat ~0.12) - musza zostac. Wczesniej prog
+    sat<0.14 lapal cale jasne buty i wypieral je do bieli (plamiasto, bo twardy
+    prog). Teraz: gladkie wagi (bez plam), nasycenie tnie dopiero <0.06 -
+    prawdziwa biel ma sat <0.05, pastel ~0.12 wiec jest nietkniety."""
     import numpy as np
     arr = np.asarray(rgba).astype(np.float64)
     rgb, a = arr[..., :3], arr[..., 3]
     mx = rgb.max(axis=2)
     mn = rgb.min(axis=2)
     sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1), 0)
-    sel = (a > 128) & (mx > 165) & (sat < 0.14)        # jasne + neutralne
-    lift = np.clip((mx - 165) / 90.0, 0, 1)            # mocniej im jasniej
-    push = (sel * lift * 0.85)[..., None]              # do 85% ku bieli
+    w_bright = np.clip((mx - 225) / 30.0, 0, 1)        # jasnosc: start 225, pelne 255
+    w_neutral = np.clip((0.06 - sat) / 0.06, 0, 1)     # tylko sat<0.06, gladko (bez plam)
+    push = ((a > 128) * w_bright * w_neutral * 0.85)[..., None]   # do 85% ku bieli
     arr[..., :3] = np.clip(rgb + (255 - rgb) * push, 0, 255)
     return Image.fromarray(arr.astype("uint8"), "RGBA")
 
