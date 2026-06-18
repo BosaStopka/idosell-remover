@@ -2100,20 +2100,31 @@ $("idoBatchAllBtn").addEventListener("click", async () => {
   const ids = [...selectedIdo];
   if (!ids.length) return;
   if (!confirm(`Obrobić WSZYSTKIE zdjęcia ${ids.length} produktów bez okna wyboru? Oryginały trafią do archiwum na D:, wyniki na dysk (nic nie idzie jeszcze do IdoSell).`)) return;
-  $("idoBatchAllBtn").disabled = true; $("idoBatchAllBtn").textContent = "Kolejkowanie...";
-  const fd = optionsForm(new FormData());
-  fd.append("product_ids", JSON.stringify(ids));
-  let data;
-  try {
-    const res = await api("/api/idosell/bulk-process", { method: "POST", body: fd });
-    data = await res.json();
-  } catch { data = { error: "Błąd połączenia" }; }
-  $("idoBatchAllBtn").disabled = false;
-  if (data.error) { alert(data.error); toggleIdo("", false); return; }
+  const btn = $("idoBatchAllBtn");
+  btn.disabled = true;
+  // dzielimy na PACZKI - jedno wielkie zadanie (serwer pobiera oryginaly
+  // synchronicznie dla kazdego ID) bije timeout przegladarki przy 200 szt.
+  const CHUNK = 40;
+  let ok = 0, failed = 0, totalJobs = 0, err = null;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const part = ids.slice(i, i + CHUNK);
+    btn.textContent = `Kolejkowanie ${Math.min(i + part.length, ids.length)}/${ids.length}...`;
+    const fd = optionsForm(new FormData());
+    fd.append("product_ids", JSON.stringify(part));
+    try {
+      const res = await api("/api/idosell/bulk-process", { method: "POST", body: fd });
+      const data = await res.json();
+      if (data.error) { err = data.error; break; }
+      ok += data.ok || 0; failed += data.failed || 0; totalJobs += data.total_jobs || 0;
+      if (totalJobs) startPolling();   // pokazuj wyniki juz po pierwszej paczce
+    } catch { err = "Błąd połączenia"; break; }
+  }
+  btn.disabled = false;
   selectedIdo.clear(); toggleIdo("", false);
   loadIdoProducts(true);
-  if (data.total_jobs) { startPolling(); document.querySelector('.tab[data-tab="studio"]').click(); }
-  if (data.failed) alert(`Zakolejkowano ${data.ok}, błędy: ${data.failed} (produkty bez zdjęć lub niedostępne).`);
+  if (totalJobs) document.querySelector('.tab[data-tab="studio"]').click();
+  if (err) { alert(`Przerwano: ${err}\nZakolejkowano wcześniej: ${ok} produktów.`); return; }
+  if (failed) alert(`Zakolejkowano ${ok}, błędy: ${failed} (produkty bez zdjęć lub niedostępne).`);
 });
 
 // ---------- edytor maski (pędzel) ----------
