@@ -142,7 +142,21 @@
   }
   .w100 { width: 100%; margin-top: 16px; }
 
-  .toolbar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+  .toolbar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  /* spojny wyglad kontrolek w paskach (te same wysokosci/obramowanie/radius) */
+  .toolbar .btn, .toolbar select, .toolbar .qa-filter {
+    height: 36px; padding: 0 14px; font-size: 13px; font-weight: 600;
+    border-radius: 9px; border: 1px solid var(--border); box-sizing: border-box;
+  }
+  .toolbar .btn-ghost, .toolbar .qa-filter { background: var(--panel2); color: var(--text); }
+  .toolbar .qa-filter { font-weight: 500; gap: 7px; }
+  .toolbar .btn-primary { border-color: transparent; box-shadow: 0 4px 14px rgba(124,108,255,.25); }
+  .toolbar select, .searchbar select {
+    background-color: var(--panel2); color: var(--text); cursor: pointer;
+    appearance: none; -webkit-appearance: none; padding-right: 30px;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" fill="none" stroke="%2390909a" stroke-width="1.6"><path d="M1 1l4 4 4-4"/></svg>');
+    background-repeat: no-repeat; background-position: right 11px center;
+  }
 
   #cards, #allegroOffers, #idoProducts { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 16px; }
   .card {
@@ -511,6 +525,9 @@
           <option value="jesień">jesień</option>
           <option value="zima">zima</option>
         </select>
+        <select id="studioSeriesSel" title="Filtr po modelu (serii) - lista z aktualnych produktów" style="font-size:12px">
+          <option value="">Model: wszystkie</option>
+        </select>
       </div>
       <div id="cards"><div class="empty">Dodaj zdjęcia, aby zacząć</div></div>
     </section>
@@ -811,6 +828,10 @@ $("hideSent").addEventListener("change", e => { hideSent = e.target.checked; ren
 $("lowOnly").addEventListener("change", e => { lowOnly = e.target.checked; render(); });
 $("studioCat").addEventListener("change", e => { studioCat = e.target.value; render(); });
 $("studioSeason").addEventListener("change", e => { studioSeason = e.target.value; render(); });
+$("studioSeriesSel").addEventListener("change", e => {
+  if (e.target.value) setStudioSeries(e.target.value, e.target.options[e.target.selectedIndex].text);
+  else clearStudioSeries();
+});
 $("stopBtn").addEventListener("click", async () => {
   const res = await api("/api/jobs/stop", { method: "POST" });
   const data = await res.json();
@@ -1019,6 +1040,19 @@ const collapsedGroups = new Set();
 // pid -> {code, executed} z przegladarki produktow (Studio grupuje po numerycznym
 // ID; SKU/kod i status 'wyslane' bierzemy stad, jesli produkt byl wczytany)
 const idoMeta = {};
+// metadane grupy w Studio: priorytet danych z ZADAN (serwer, przezywaja
+// odswiezenie) nad idoMeta (przegladarka, ulotne). category/season/series/executed.
+function studioMeta(pid, gjobs) {
+  const meta = { ...(idoMeta[pid] || {}) };
+  const jm = (gjobs || []).find(j => j.series_id != null
+    || (j.category && j.category.length) || (j.season && j.season.length)
+    || j.executed != null) || {};
+  if (jm.series_id != null) { meta.series_id = jm.series_id; meta.series_name = jm.series_name; }
+  if (jm.category && jm.category.length) meta.category = jm.category;
+  if (jm.season && jm.season.length) meta.season = jm.season;
+  if (jm.executed != null) meta.executed = jm.executed;
+  return meta;
+}
 function toggleGroup(pid) {
   if (collapsedGroups.has(pid)) collapsedGroups.delete(pid);
   else collapsedGroups.add(pid);
@@ -1055,10 +1089,24 @@ function render() {
   // bez serii (lub nie z IdoSell) ida na koniec, zachowujac kolejnosc
   let groupEntries = [...groups.entries()];
   groupEntries.sort((a, b) => {
-    const sa = (idoMeta[a[0]] || {}).series_name || "￿";
-    const sb = (idoMeta[b[0]] || {}).series_name || "￿";
+    const sa = studioMeta(a[0], a[1]).series_name || "￿";
+    const sb = studioMeta(b[0], b[1]).series_name || "￿";
     return sa.localeCompare(sb) || String(a[0]).localeCompare(String(b[0]));
   });
+  // dropdown "Model" w Studio - lista modeli z aktualnych grup (sig => bez migotania)
+  const seriesSel = $("studioSeriesSel");
+  if (seriesSel) {
+    const seen = new Map();
+    for (const [pid, gj] of groupEntries) {
+      const sm = studioMeta(pid, gj);
+      if (sm.series_id != null) seen.set(String(sm.series_id), sm.series_name || ("seria " + sm.series_id));
+    }
+    const opts = `<option value="">Model: wszystkie</option>` +
+      [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([id, nm]) => `<option value="${esc(id)}">${esc(nm)}</option>`).join("");
+    if (seriesSel.dataset.sig !== opts) { seriesSel.innerHTML = opts; seriesSel.dataset.sig = opts; }
+    seriesSel.value = studioSeries;
+  }
   // chip filtra serii (modelu) - z badge'a w naglowku folderu
   if (studioSeries) {
     html += `<div class="group-head" style="background:var(--panel)">
@@ -1081,7 +1129,7 @@ function render() {
     const flagged = gjobs.filter(j => j.status === "done" && j.qa && !j.qa.ok).length;
     if (qaOnly && !flagged) continue;   // filtr: tylko grupy z uwagami QA
     if (lowOnly && !gjobs.some(j => j.lowres)) continue;   // tylko grupy z malym zrodlem
-    const meta = idoMeta[pid] || {};
+    const meta = studioMeta(pid, gjobs);
     if (hideSent && meta.executed) continue;   // ukryj produkty juz wyslane
     if (studioSeries && String(meta.series_id || "") !== studioSeries) continue;  // filtr po serii
     // filtr kategoria/sezon (z idoMeta z przegladarki) - grupy bez metadanych

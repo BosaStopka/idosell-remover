@@ -362,9 +362,11 @@ def api_jobs():
             out.append({k: j.get(k) for k in
                         ("id", "name", "status", "result", "error",
                          "source", "orig", "seconds", "editable", "qa", "rev")})
-    # wzbogac zadania IdoSell o pid/index/ikony z planu - do kuracji w Studio
-    # (przypiecie do Lista/Grupa/Bez tla + kolejnosc, prosto na kafelku)
+    # wzbogac zadania IdoSell o pid/index/ikony z planu + kategoria/sezon/seria
+    # i flage 'wyslane' - SERWEROWO, zeby Studio mialo dane do badge'y i filtrow
+    # niezaleznie od idoMeta (ktore znika po odswiezeniu strony).
     plan_cache = {}
+    pid_meta = _ido_series_pid_meta()   # z cache indeksu serii (jesli jest)
     for o in out:
         if o.get("source") != "idosell" or o.get("status") != "done":
             continue
@@ -376,6 +378,12 @@ def api_jobs():
         idx = int(m.group(1))
         o["pid"] = pid
         o["photo_index"] = idx
+        meta = pid_meta.get(pid)
+        if meta:
+            o["category"] = meta["category"]
+            o["season"] = meta["season"]
+            o["series_id"] = meta["series_id"]
+            o["series_name"] = meta["series_name"]
         if pid not in plan_cache:
             pf = DONE_DIR / pid / "plan.json"
             try:
@@ -391,6 +399,7 @@ def api_jobs():
             o["gallery_pos"] = next((i for i, d in enumerate(decs)
                                      if d.get("index") == idx), None)
             o["gallery_len"] = len(decs)
+            o["executed"] = bool(plan.get("executed_at")) and not plan.get("rolled_back_at")
     # rozmiar zrodla (oryginalu) + flaga "male zrodlo" - liczony raz, cache na zadaniu
     from PIL import Image as _Img
     for o in out:
@@ -1782,6 +1791,35 @@ def get_ido_series_index(refresh: bool = False) -> dict:
     except OSError:
         pass
     return index
+
+
+_SERIES_PID_META = {"mtime": 0, "map": {}}
+
+
+def _ido_series_pid_meta() -> dict:
+    """Mapa productId(str) -> {category, season, series_id, series_name} z CACHE
+    indeksu serii (NIE buduje go - tylko czyta, gdy istnieje). Dzieki temu
+    /api/jobs moze podac metadane do Studio serwerowo (przezywaja odswiezenie
+    strony), bez zaleznosci od idoMeta w pamieci przegladarki."""
+    if not SERIES_INDEX_FILE.exists():
+        return {}
+    mt = SERIES_INDEX_FILE.stat().st_mtime
+    if _SERIES_PID_META["mtime"] != mt:
+        m = {}
+        try:
+            idx = (json.loads(SERIES_INDEX_FILE.read_text(encoding="utf-8"))
+                   or {}).get("index") or {}
+            for _sid, e in idx.items():
+                for r in e.get("products") or []:
+                    m[str(r.get("id"))] = {
+                        "category": r.get("category") or [],
+                        "season": r.get("season") or [],
+                        "series_id": r.get("series_id"),
+                        "series_name": r.get("series_name") or ""}
+        except (json.JSONDecodeError, OSError):
+            m = {}
+        _SERIES_PID_META.update(mtime=mt, map=m)
+    return _SERIES_PID_META["map"]
 
 
 @app.get("/api/idosell/series")
