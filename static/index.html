@@ -491,6 +491,24 @@
         <button class="btn btn-primary" id="bulkPushBtn" style="margin-left:auto">📤 Wyślij gotowe do IdoSell</button>
         <label class="qa-filter"><input type="checkbox" id="qaOnly"> ⚠ Tylko z uwagami QA</label>
         <label class="qa-filter"><input type="checkbox" id="hideSent"> 🙈 Ukryj wysłane</label>
+        <select id="studioCat" title="Filtr po kategorii (Rodzaj z IdoSell)" style="font-size:12px">
+          <option value="">Kategoria: wszystkie</option>
+          <option value="sandały">sandały</option>
+          <option value="kapcie">kapcie</option>
+          <option value="sneakersy">sneakersy</option>
+          <option value="buty sportowe">buty sportowe</option>
+          <option value="buty przejściowe">buty przejściowe</option>
+          <option value="buty zimowe">buty zimowe</option>
+          <option value="kalosze">kalosze</option>
+          <option value="pierwsze buty">pierwsze buty</option>
+        </select>
+        <select id="studioSeason" title="Filtr po sezonie (Pora roku z IdoSell)" style="font-size:12px">
+          <option value="">Sezon: wszystkie</option>
+          <option value="wiosna">wiosna</option>
+          <option value="lato">lato</option>
+          <option value="jesień">jesień</option>
+          <option value="zima">zima</option>
+        </select>
       </div>
       <div id="cards"><div class="empty">Dodaj zdjęcia, aby zacząć</div></div>
     </section>
@@ -772,6 +790,8 @@ goBtn.addEventListener("click", async () => {
 });
 $("qaOnly").addEventListener("change", e => { qaOnly = e.target.checked; render(); });
 $("hideSent").addEventListener("change", e => { hideSent = e.target.checked; render(); });
+$("studioCat").addEventListener("change", e => { studioCat = e.target.value; render(); });
+$("studioSeason").addEventListener("change", e => { studioSeason = e.target.value; render(); });
 $("stopBtn").addEventListener("click", async () => {
   const res = await api("/api/jobs/stop", { method: "POST" });
   const data = await res.json();
@@ -958,7 +978,7 @@ const STATUS = {
 };
 
 const QA_LBL = { tlo: "tło", maly: "za mały", proporcje: "proporcje", fragmenty: "fragmenty", pusta: "pusta maska" };
-let qaOnly = false, hideSent = false;
+let qaOnly = false, hideSent = false, studioCat = "", studioSeason = "";
 const collapsedGroups = new Set();
 // pid -> {code, executed} z przegladarki produktow (Studio grupuje po numerycznym
 // ID; SKU/kod i status 'wyslane' bierzemy stad, jesli produkt byl wczytany)
@@ -1011,6 +1031,10 @@ function render() {
     if (qaOnly && !flagged) continue;   // filtr: tylko grupy z uwagami QA
     const meta = idoMeta[pid] || {};
     if (hideSent && meta.executed) continue;   // ukryj produkty juz wyslane
+    // filtr kategoria/sezon (z idoMeta z przegladarki) - grupy bez metadanych
+    // pokazujemy zawsze, zeby nie chowac produktow ktorych jeszcze nie wczytano
+    if (studioCat && (meta.category || []).length && !meta.category.includes(studioCat)) continue;
+    if (studioSeason && (meta.season || []).length && !meta.season.includes(studioSeason)) continue;
     const isAllegro = gjobs.some(j => j.source === "allegro");
     const isIdo = gjobs.some(j => j.source === "idosell");
     const collapsed = collapsedGroups.has(pid);
@@ -1018,7 +1042,7 @@ function render() {
     html += `<div class="group-head">
       <button class="grp-toggle" onclick="toggleGroup('${esc(pid)}')" title="Zwiń / rozwiń">${collapsed ? "▸" : "▾"}</button>
       ${isIdo ? `<input type="checkbox" title="Zaznacz produkt - zbiorcza wysyłka/cofnięcie w pasku powyżej" ${selectedIdo.has(String(pid)) ? "checked" : ""} onclick="event.stopPropagation(); toggleIdo('${esc(pid)}', this.checked); render();" style="width:16px;height:16px;accent-color:var(--accent)">` : ""}
-      <h3>📁 ${esc(pid)}${meta.code ? ` · ${esc(meta.code)}` : ""}</h3>
+      <h3>📁 ${isIdo ? `<a href="${IDO_PANEL}${esc(pid)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none" title="Otwórz produkt w panelu IdoSell">${esc(pid)} ↗</a>` : esc(pid)}${meta.code ? ` · ${esc(meta.code)}` : ""}</h3>
       ${meta.executed ? `<span class="badge done" title="Galeria wysłana do IdoSell">✅ wysłane</span>` : ""}
       ${(meta.category && meta.category.length) ? `<span class="badge" title="Rodzaj (kategoria z IdoSell)">${esc(meta.category.join(", "))}</span>` : ""}
       ${(meta.season && meta.season.length) ? `<span class="badge" style="${meta.season.includes("zima") ? "color:#74b9ff;border:1px solid #74b9ff" : ""}" title="Pora roku (sezon z IdoSell)">${meta.season.includes("zima") ? "❄ " : ""}${esc(meta.season.join("/"))}</span>` : ""}
