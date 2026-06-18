@@ -27,3 +27,7 @@ __pycache__/
 *compare.png
 test_zip.zip
 samples/
+
+# logi serwera (debug)
+_server.err.log
+_server.out.log

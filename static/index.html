@@ -2102,11 +2102,26 @@ $("idoBatchAllBtn").addEventListener("click", async () => {
   if (!confirm(`Obrobić WSZYSTKIE zdjęcia ${ids.length} produktów bez okna wyboru? Oryginały trafią do archiwum na D:, wyniki na dysk (nic nie idzie jeszcze do IdoSell).`)) return;
   const btn = $("idoBatchAllBtn");
   btn.disabled = true;
-  // dzielimy na PACZKI - jedno wielkie zadanie (serwer pobiera oryginaly
-  // synchronicznie dla kazdego ID) bije timeout przegladarki przy 200 szt.
-  const CHUNK = 40;
-  let ok = 0, failed = 0, totalJobs = 0, err = null;
+  // MALE paczki + THROTTLING po glebokosci kolejki. Wielkie zadanie (serwer
+  // pobiera oryginaly synchronicznie per ID + worker mieli rownolegle) zrywalo
+  // polaczenie/ubijalo proces. Tu: kolejkujemy po troche i czekamy az kolejka
+  // zejdzie ponizej progu, by nie zalewac workera (ochrona RAM serwera).
+  const CHUNK = 6, MAX_INFLIGHT = 30;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function queueLoad() {
+    try {
+      const r = await api("/api/jobs"); const j = await r.json();
+      return j.filter(x => x.status === "queued" || x.status === "processing").length;
+    } catch { return 0; }
+  }
+  let ok = 0, failed = 0, totalJobs = 0, sentTab = false;
   for (let i = 0; i < ids.length; i += CHUNK) {
+    // throttle - poczekaj az worker przemieli zaleglosci
+    let guard = 0;
+    while (await queueLoad() > MAX_INFLIGHT && guard++ < 150) {
+      btn.textContent = `Czekam na obróbkę (${i}/${ids.length})...`;
+      await sleep(2000);
+    }
     const part = ids.slice(i, i + CHUNK);
     btn.textContent = `Kolejkowanie ${Math.min(i + part.length, ids.length)}/${ids.length}...`;
     const fd = optionsForm(new FormData());
@@ -2114,17 +2129,23 @@ $("idoBatchAllBtn").addEventListener("click", async () => {
     try {
       const res = await api("/api/idosell/bulk-process", { method: "POST", body: fd });
       const data = await res.json();
-      if (data.error) { err = data.error; break; }
-      ok += data.ok || 0; failed += data.failed || 0; totalJobs += data.total_jobs || 0;
-      if (totalJobs) startPolling();   // pokazuj wyniki juz po pierwszej paczce
-    } catch { err = "Błąd połączenia"; break; }
+      if (data.error) { failed += part.length; }
+      else {
+        ok += data.ok || 0; failed += data.failed || 0; totalJobs += data.total_jobs || 0;
+        if (totalJobs && !sentTab) {
+          startPolling(); document.querySelector('.tab[data-tab="studio"]').click(); sentTab = true;
+        }
+      }
+    } catch {
+      failed += part.length;   // blip/restart serwera - policz i jedz dalej
+      await sleep(1500);
+    }
   }
   btn.disabled = false;
   selectedIdo.clear(); toggleIdo("", false);
   loadIdoProducts(true);
-  if (totalJobs) document.querySelector('.tab[data-tab="studio"]').click();
-  if (err) { alert(`Przerwano: ${err}\nZakolejkowano wcześniej: ${ok} produktów.`); return; }
-  if (failed) alert(`Zakolejkowano ${ok}, błędy: ${failed} (produkty bez zdjęć lub niedostępne).`);
+  alert(`Zakończono kolejkowanie.\nZakolejkowano produktów: ${ok}` +
+        (failed ? `\nNieudane: ${failed} (bez zdjęć / blip połączenia - można ponowić).` : ""));
 });
 
 // ---------- edytor maski (pędzel) ----------

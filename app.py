@@ -3055,4 +3055,6 @@ if __name__ == "__main__":
     logging.getLogger("werkzeug").addFilter(QuietPollingFilter())
     print("idosell-remover: http://127.0.0.1:5001")
     print(f"PIN dostepu: {APP_CFG['pin']}")
-    app.run(host="127.0.0.1", port=5001, debug=False)
+    # threaded=True: dlugie zadania (np. masowa obrobka) nie blokuja UI/pollingu
+    # - dostep do wspoldzielonego stanu i tak chroniony przez 'lock'
+    app.run(host="127.0.0.1", port=5001, debug=False, threaded=True)
