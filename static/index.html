@@ -1312,6 +1312,7 @@ function render() {
               : `${canRetry ? `<a href="#" onclick="retryJob('${j.id}', this); return false" title="Obrob ponownie z aktualnymi ustawieniami">↻ Ponów</a>` : ""}
                  ${j.status === "done" ? `<a href="#" onclick="flipPhoto('${j.id}'); return false" title="Odbij lustrzanie gotowego zdjęcia (kierunek noska) - bez ponownej obróbki">⇄ Odbij</a>` : ""}
                  ${(j.status === "done" || j.status === "error") && j.orig ? `<a href="#" onclick="replaceUrl('${j.id}'); return false" title="Podmień źródło na lepsze zdjęcie z linku (np. wyższa rozdzielczość) i przerób ponownie">🔗 Zamień (link)</a>` : ""}`}
+            ${j.source === "idosell" && j.pid && j.photo_index != null ? `<a href="#" onclick="studioDelete('${esc(j.pid)}', ${j.photo_index}); return false" style="color:var(--err)" title="Usuń to zdjęcie z produktu - nie pójdzie do galerii (jeśli było w sklepie, zniknie przy najbliższej wysyłce)">🗑 Usuń</a>` : ""}
           </div>
           ${j.source === "idosell" && j.status === "done" && j.pid ? `
           <div class="order-row" style="margin-top:6px">
@@ -2459,8 +2460,9 @@ async function processIdoProduct(id, btn) {
       action: (data.suggestions || [])[i] || "process",
       suggested: (data.suggestions || [])[i] === "keep",
       index: i + 1,
-      // domyslnie zdjecie nr 1 -> Lista + Grupa
-      icons: i === 0 ? ["shop", "group"] : [],
+      // domyslnie zdjecie nr 1 -> Lista + Grupa + Bez tla (auction) - "bez tla"
+      // idzie tez na Allegro, wiec auto-zaznaczamy
+      icons: i === 0 ? ["shop", "group", "auction"] : [],
       mirror: false,
     })),
     btn,

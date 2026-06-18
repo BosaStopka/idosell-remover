@@ -142,7 +142,7 @@ def extract_product_id(stem: str) -> str:
 
 PERSIST_KEYS = ("id", "name", "status", "result", "error", "source",
                 "orig", "options", "seconds", "editable", "qa", "kept",
-                "fashion", "rev")
+                "fashion", "rev", "dup", "dup_keep")
 
 
 def persist_jobs():
@@ -429,7 +429,7 @@ def api_jobs():
             out.append({k: j.get(k) for k in
                         ("id", "name", "status", "result", "error",
                          "source", "orig", "seconds", "editable", "qa", "rev",
-                         "kept", "fashion")})
+                         "kept", "fashion", "dup", "dup_keep")})
     # wzbogac zadania IdoSell o pid/index/ikony z planu + kategoria/sezon/seria
     # i flage 'wyslane' - SERWEROWO, zeby Studio mialo dane do badge'y i filtrow
     # niezaleznie od idoMeta (ktore znika po odswiezeniu strony).
@@ -2132,6 +2132,7 @@ def idosell_product_process(product_id):
 
     created = []
     errors = []
+    dup_entries = []   # (job_id, index, data) do wykrycia duplikatow
     for i, d in enumerate(decisions, 1):
         act = d.get("action")
         if act not in ("process", "keep"):
@@ -2144,12 +2145,16 @@ def idosell_product_process(product_id):
             continue
         if act == "keep":
             # zostawione -> widoczna karta (oryginal bez ciecia, bez maski)
-            submit_kept(product_id, idx, data, fashion=bool(d.get("fashion")))
+            jid = submit_kept(product_id, idx, data, fashion=bool(d.get("fashion")))
+            if jid:
+                dup_entries.append((jid, idx, data))
             continue
         # mirror per zdjecie (standaryzacja kierunku noska)
         job_opts = {**options, "mirror": bool(d.get("mirror"))}
-        created.append(submit_job(
-            f"{product_id}_{idx}.jpg", data, job_opts, source="idosell"))
+        jid = submit_job(f"{product_id}_{idx}.jpg", data, job_opts, source="idosell")
+        created.append(jid)
+        dup_entries.append((jid, idx, data))
+    _flag_duplicates(dup_entries)   # nominacja slabszej rozdz. do usuniecia
     skipped = sum(1 for d in decisions if d.get("action") == "keep")
     to_delete = sum(1 for d in decisions if d.get("action") == "delete")
     return jsonify({"jobs": created, "errors": errors,
@@ -2157,27 +2162,134 @@ def idosell_product_process(product_id):
                     "archive": archive})
 
 
-def _ido_process_default(product_id: int, options: dict) -> dict:
-    """Obrobka wsadowa jednego produktu z domyslnym planem: wszystkie
-    zdjecia 'Obrob', zdjecie #1 -> ikona Listy + Grupy. Archiwum + plan +
-    kolejka. Zwraca {ok, jobs, error}."""
-    archive_originals(product_id)
-    _reset_product_jobs(product_id)   # ponowna obrobka: skasuj stare zadania
+def _dhash(data: bytes, size: int = 8) -> int:
+    """Percepcyjny hash roznicowy (dHash) - odporny na rozmiar/kompresje,
+    czuly na tresc. Bez dodatkowych zaleznosci (sam PIL)."""
+    from io import BytesIO
+    from PIL import Image
+    im = Image.open(BytesIO(data)).convert("L").resize(
+        (size + 1, size), Image.LANCZOS)
+    px = list(im.getdata())
+    bits = 0
+    for r in range(size):
+        row = r * (size + 1)
+        for c in range(size):
+            bits = (bits << 1) | (1 if px[row + c] < px[row + c + 1] else 0)
+    return bits
+
+
+def _flag_duplicates(entries, thresh: int = 8) -> int:
+    """entries: lista (job_id, photo_index, data_bytes). Wykrywa bliskie
+    DUPLIKATY (dHash, odleglosc Hamminga <= thresh) i flaguje te o SLABSZEJ
+    rozdzielczosci: dup=True + dup_keep=index lepszego (nominacja do usuniecia).
+    Wyzsza rozdzielczosc w grupie zostaje. Zwraca liczbe oflagowanych."""
+    from io import BytesIO
+    from PIL import Image
+    items = []
+    for jid, idx, data in entries:
+        if not data:
+            continue
+        try:
+            h = _dhash(data)
+            with Image.open(BytesIO(data)) as im:
+                area = im.size[0] * im.size[1]
+        except Exception:
+            continue
+        items.append({"jid": jid, "idx": idx, "hash": h, "area": area})
+    flagged, n, used = 0, len(items), [False] * len(items)
+    for i in range(n):
+        if used[i]:
+            continue
+        cluster = [i]
+        for j in range(i + 1, n):
+            if not used[j] and bin(items[i]["hash"] ^ items[j]["hash"]).count("1") <= thresh:
+                cluster.append(j); used[j] = True
+        used[i] = True
+        if len(cluster) < 2:
+            continue
+        keeper = max(cluster, key=lambda k: items[k]["area"])
+        keep_idx = items[keeper]["idx"]
+        for k in cluster:
+            if k == keeper:
+                continue
+            jid = items[k]["jid"]
+            with lock:
+                if jid in jobs:
+                    jobs[jid]["dup"] = True
+                    jobs[jid]["dup_keep"] = keep_idx
+                    flagged += 1
+    if flagged:
+        persist_jobs()
+    return flagged
+
+
+def _archived_images(product_id):
+    """Oryginaly z trwalego archiwum (D:\\idosell_backup\\{pid}) jako
+    [{id, slot, url, data}] - ZRODLO PRAWDY przy ponownej obrobce. Aktualny
+    IdoSell PO WYSYLCE to juz NASZE obrobione zdjecia, wiec reprocess MUSI brac
+    archiwum (zrzucone przy pierwszej obrobce, przed jakimkolwiek zapisem).
+    None gdy brak archiwum/dysku (wtedy fallback do aktualnego IdoSell)."""
+    root = ido_backup_root()
+    if root is None:
+        return None
+    manifest = root / str(product_id) / "_originals.json"
+    if not manifest.exists():
+        return None
     try:
-        images = idosell_client.get_product_images(product_id)
-    except idosell_client.IdoSellError as e:
-        return {"ok": False, "error": str(e), "jobs": 0}
+        info = json.loads(manifest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    out = []
+    for e in info.get("images", []):
+        fp = root / str(product_id) / (e.get("file") or "")
+        try:
+            data = fp.read_bytes()
+        except OSError:
+            continue
+        out.append({"id": e.get("id"), "slot": e.get("slot"),
+                    "url": e.get("url"), "data": data})
+    return out or None
+
+
+def _ido_process_default(product_id: int, options: dict) -> dict:
+    """Obrobka wsadowa produktu domyslnym planem: zdjecia 'Obrob' (fashion ->
+    'keep'), zdjecie #1 -> ikona Listy + Grupy. ZRODLO = trwale archiwum
+    ORYGINALOW (nie aktualny IdoSell - po wysylce to obrobione!). Dograne
+    recznie zdjecia (extras) z poprzedniego planu sa ZACHOWANE. Zwraca {ok,...}."""
+    archive_originals(product_id)   # idempotent: pierwszy zrzut = prawdziwe oryginaly
+    # zachowaj dograne recznie zdjecia (extras) z poprzedniego planu - reprocess
+    # ma je przepuscic ponownie, nie wyrzucic
+    pf = DONE_DIR / str(product_id) / "plan.json"
+    old_extras = []
+    if pf.exists():
+        try:
+            old = json.loads(pf.read_text(encoding="utf-8"))
+            old_extras = [d for d in old.get("decisions", []) if d.get("extra")]
+        except (json.JSONDecodeError, OSError):
+            pass
+    _reset_product_jobs(product_id)   # skasuj stare zadania (karty)
+    # ORYGINALY z archiwum; fallback do aktualnego IdoSell gdy brak archiwum
+    images = _archived_images(product_id)
+    if images is None:
+        try:
+            images = [{"id": i["id"], "slot": i["slot"], "url": i["url"],
+                       "data": None}
+                      for i in idosell_client.get_product_images(product_id)]
+        except idosell_client.IdoSellError as e:
+            return {"ok": False, "error": str(e), "jobs": 0}
     if not images:
         return {"ok": False, "error": "produkt bez zdjec", "jobs": 0}
 
-    # pobierz raz, wykryj fashion (kolorowe/zlozone tlo) - jak w oknie wyboru:
-    # fashion -> "keep" (zostaw, NIE obrabiaj); reszta -> "process" + kolejka.
+    # wykryj fashion (kolorowe/zlozone tlo) -> "keep"; reszta -> "process".
     decisions, jobs_made, kept = [], 0, 0
+    dup_entries = []   # (job_id, index, data) do wykrycia duplikatow
     for i, im in enumerate(images):
-        try:
-            data = idosell_client.download_image(im["url"])
-        except idosell_client.IdoSellError:
-            data = None
+        data = im.get("data")
+        if data is None:
+            try:
+                data = idosell_client.download_image(im["url"])
+            except idosell_client.IdoSellError:
+                data = None
         is_fashion = False
         if data:
             try:
@@ -2188,15 +2300,47 @@ def _ido_process_default(product_id: int, options: dict) -> dict:
         decisions.append({"index": i + 1, "image_id": im["id"], "slot": im["slot"],
                           "url": im["url"], "action": action, "mirror": False,
                           "fashion": is_fashion,
-                          "icons": ["shop", "group"] if i == 0 else []})
+                          # zdjecie #1 -> Lista + Grupa + Bez tla (auction) -
+                          # "bez tla" idzie tez na Allegro, wiec auto-zaznaczamy
+                          "icons": ["shop", "group", "auction"] if i == 0 else []})
         if action == "process" and data:
-            submit_job(f"{product_id}_{i + 1}.jpg", data,
-                       {**options, "mirror": False}, source="idosell")
+            jid = submit_job(f"{product_id}_{i + 1}.jpg", data,
+                             {**options, "mirror": False}, source="idosell")
+            dup_entries.append((jid, i + 1, data))
             jobs_made += 1
         elif action == "keep" and data:
-            # fashion ZOSTAWIONE jako widoczna karta (oryginal, bez ciecia)
-            submit_kept(product_id, i + 1, data, fashion=True)
+            jid = submit_kept(product_id, i + 1, data, fashion=True)
+            if jid:
+                dup_entries.append((jid, i + 1, data))
             kept += 1
+    # dolacz ZACHOWANE dograne zdjecia (extras) - z plikow w extras/
+    for d in old_extras:
+        ex = d.get("extra")
+        if not ex or not (EXTRAS_DIR / ex).exists():
+            continue
+        try:
+            data = (EXTRAS_DIR / ex).read_bytes()
+        except OSError:
+            continue
+        idx = d.get("index") or (max([900] + [x["index"] for x in decisions]) + 1)
+        action = d.get("action") if d.get("action") in ("process", "keep") else "process"
+        decisions.append({"index": idx, "image_id": None, "slot": None,
+                          "url": None, "action": action,
+                          "mirror": bool(d.get("mirror")),
+                          "fashion": bool(d.get("fashion")), "extra": ex,
+                          "icons": d.get("icons") or []})
+        if action == "keep":
+            jid = submit_kept(product_id, idx, data, fashion=bool(d.get("fashion")))
+            if jid:
+                dup_entries.append((jid, idx, data))
+            kept += 1
+        else:
+            jid = submit_job(f"{product_id}_{idx}.jpg", data,
+                             {**options, "mirror": bool(d.get("mirror"))},
+                             source="idosell")
+            dup_entries.append((jid, idx, data))
+            jobs_made += 1
+    dups = _flag_duplicates(dup_entries)   # nominacja slabszej rozdz. do usuniecia
     out_dir = DONE_DIR / str(product_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "plan.json").write_text(json.dumps({
@@ -2205,6 +2349,7 @@ def _ido_process_default(product_id: int, options: dict) -> dict:
         "decisions": decisions,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     return {"ok": bool(decisions), "jobs": jobs_made, "kept": kept,
+            "dups": dups,
             "error": None if decisions else "nie pobrano zdjec"}
 
 
