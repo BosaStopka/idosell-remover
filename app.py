@@ -2365,6 +2365,52 @@ def idosell_plan_add(product_id):
     return jsonify({"ok": True, "index": new_idx})
 
 
+@app.post("/api/idosell/products/<int:product_id>/add-url")
+def idosell_add_url(product_id):
+    """Dodaje zdjecie z LINKU (internet) do istniejacego planu jako 'process'
+    + dokolejkowuje obrobke. Do uzupelniania brakujacych ujec znalezionych w
+    sieci, gdy produkt ma za malo zdjec. To UZYTKOWNIK wskazuje link, wiec brak
+    ryzyka zlego dopasowania. Po obrobce wyslij produkt (nadpisze galeria)."""
+    from io import BytesIO
+    import requests as rq
+    from PIL import Image
+    options = parse_options(request.form)
+    url = (request.form.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return jsonify({"error": "Podaj poprawny adres http(s)"}), 400
+    pf = DONE_DIR / str(product_id) / "plan.json"
+    if not pf.exists():
+        return jsonify({"error": "Najpierw obrob ten produkt (brak planu)"}), 404
+    try:
+        resp = rq.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code != 200:
+            return jsonify({"error": f"Pobranie nieudane ({resp.status_code})"}), 400
+        content = resp.content
+        with Image.open(BytesIO(content)) as im:   # walidacja: czy to obraz
+            w, h = im.size
+    except Exception as e:
+        return jsonify({"error": f"Nie udalo sie pobrac obrazu: {e}"}), 400
+    fname = f"{product_id}_{uuid.uuid4().hex[:8]}.jpg"
+    try:
+        (EXTRAS_DIR / fname).write_bytes(content)
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    plan = json.loads(pf.read_text(encoding="utf-8"))
+    decs = plan.get("decisions", [])
+    # wysoki index (>=901) - zdjecie dodane laduje na koncu galerii (mozna
+    # przesunac w Studio); nie koliduje ze slotami oryginalnej galerii
+    new_idx = max([900] + [d.get("index", 0) for d in decs]) + 1
+    decs.append({"index": new_idx, "image_id": None, "slot": None,
+                 "url": None, "action": "process", "mirror": False,
+                 "icons": [], "extra": fname})
+    plan["decisions"] = decs
+    pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
+                  encoding="utf-8")
+    submit_job(f"{product_id}_{new_idx}.jpg", content,
+               {**options, "mirror": False}, source="idosell")
+    return jsonify({"ok": True, "index": new_idx, "w": w, "h": h})
+
+
 # ------------- IdoSell FAZA 2: wykonanie planu (zapis do sklepu) -------------
 
 IDO_AUDIT_FILE = BASE / "idosell_audit.jsonl"

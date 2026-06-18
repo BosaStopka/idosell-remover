@@ -876,6 +876,56 @@ async function processAnyway(pid, index) {
   startPolling();
 }
 
+// dodanie brakujacego zdjecia do produktu z LINKU (internet): pobierz, obrob,
+// dodaj na koniec galerii. Do uzupelniania produktow ktore maja za malo zdjec.
+async function addPhotoUrl(pid) {
+  const url = prompt("Wklej link (URL) do zdjęcia, które ma dojść do tego produktu:");
+  if (!url) return;
+  const fd = optionsForm(new FormData());
+  fd.append("url", url.trim());
+  let data;
+  try {
+    const res = await api(`/api/idosell/products/${pid}/add-url`, { method: "POST", body: fd });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); return; }
+  lastJobsKey = "";
+  startPolling();   // nowe zdjecie (${data.w}x${data.h}) w obrobce
+}
+
+// ponowna obrobka CALEGO produktu od nowa (aktualne ustawienia): reset starych
+// kart/planu + domyslny plan z wykryciem fashion (jak masowka na 1 ID).
+async function reprocessProduct(pid) {
+  if (!confirm("Obrobić ten produkt jeszcze raz od nowa?\n\nSkasuje obecne karty i plan tego produktu, po czym przetworzy wszystkie zdjęcia ponownie z aktualnymi ustawieniami (fashion zostanie wykryte i zostawione).")) return;
+  const fd = optionsForm(new FormData());
+  fd.append("product_ids", JSON.stringify([Number(pid)]));
+  let data;
+  try {
+    const res = await api("/api/idosell/bulk-process", { method: "POST", body: fd });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); return; }
+  lastJobsKey = "";
+  startPolling();
+}
+
+// usuniecie zdjecia z produktu (karta znika + w planie action=delete, wiec nie
+// pojdzie do galerii; jak bylo w sklepie - zniknie przy wysylce).
+async function studioDelete(pid, index) {
+  if (!confirm("Usunąć to zdjęcie z produktu?\n\nNie pójdzie do galerii. Jeśli było już w sklepie, zniknie przy najbliższej wysyłce.")) return;
+  const fd = optionsForm(new FormData());
+  fd.append("index", index);
+  fd.append("action", "delete");
+  let data;
+  try {
+    const res = await api(`/api/idosell/products/${pid}/photo-action`, { method: "POST", body: fd });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); return; }
+  lastJobsKey = "";
+  refresh();
+}
+
 // ---------- przetwarzanie ----------
 goBtn.addEventListener("click", async () => {
   if (!pending.length) return;
@@ -1219,6 +1269,8 @@ function render() {
       ${isAllegro ? `<span class="badge allegro">Allegro</span>` : ""}
       ${isIdo ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">IdoSell</span>` : ""}
       <span style="margin-left:auto;display:flex;gap:8px">
+        ${isIdo ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="reprocessProduct('${esc(pid)}')" title="Obrób ten produkt jeszcze raz od nowa, z aktualnymi ustawieniami (skasuje obecne karty i plan, przetworzy wszystkie zdjęcia ponownie)">🔄 Obrób jeszcze raz</button>` : ""}
+        ${isIdo ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="addPhotoUrl('${esc(pid)}')" title="Dodaj brakujące zdjęcie z linku (np. znalezione w sieci) - pobierze, obrobi i doda na koniec galerii">🔗 Dodaj zdjęcie (link)</button>` : ""}
         ${doneCount >= 3 ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="levelColors('${esc(pid)}', this)" title="Wykryj zdjęcia z innej sesji (inna tonacja) i dopasuj do większości">🎨 Wyrównaj barwy</button>` : ""}
         ${isIdo ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" ${allDone ? "" : "disabled title='Najpierw dokończ obróbkę'"} onclick="openIdoPlan('${esc(pid)}')">📤 Wyślij do IdoSell</button>` : ""}
       </span>
@@ -1252,6 +1304,7 @@ function render() {
             ${j.status === "done" && j.qa && j.qa.ok ? `<span class="badge" style="color:var(--ok)" title="Auto-kontrola jakości OK">✓ QA</span>` : ""}
             ${j.lowres && !j.kept ? `<span class="badge" style="color:#ffd166;border:1px solid #ffd166" title="Małe źródło - po powiększeniu może być miękkie. Wskaż lepsze przez 🔗 Zamień (link)">⚠ małe źródło ${j.src_w}×${j.src_h}</span>` : ""}
             ${j.kept ? `<span class="badge" style="color:#74b9ff;border:1px solid #74b9ff" title="${j.fashion ? "Wykryte jako fashion (kolorowe/złożone tło) - zostawione BEZ obróbki. Jeśli to pomyłka, kliknij 'Obrób mimo to'." : "Zostawione bez obróbki (zdjęcie 1:1 do galerii)."}">${j.fashion ? "🧍 fashion - zostawione" : "✋ zostawione"}</span>` : ""}
+            ${j.dup ? `<span class="badge" style="color:var(--err);border:1px solid var(--err)" title="Duplikat zdjęcia #${j.dup_keep}, które ma wyższą rozdzielczość. Nominowane do usunięcia - kliknij 🗑 Usuń (albo zostaw, jeśli to nie duplikat).">🔁 duplikat → usuń?</span>` : ""}
           </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             ${j.status === "done" ? `<a href="/done/${j.result}" download>Pobierz JPG</a>` : ""}
