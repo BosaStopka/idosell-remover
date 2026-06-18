@@ -783,6 +783,41 @@ function toggleBA(img) {
   img.nextElementSibling.textContent = showBefore ? "PRZED" : "PO";
 }
 
+// ---- podglad po najechaniu (hover zoom) na miniature w Studio ----
+// Duzy podglad bez otwierania - sprawdzenie detali. Pokazuje to, co aktualnie
+// widac na karcie (po/przed), po PRZECIWNEJ stronie kursora, by nie zaslaniac.
+const hoverZoom = document.createElement("div");
+hoverZoom.style.cssText = "position:fixed;top:50%;transform:translateY(-50%);" +
+  "z-index:9999;pointer-events:none;display:none;border:1px solid var(--border);" +
+  "border-radius:12px;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.55);background:#fff";
+const hoverImg = document.createElement("img");
+hoverImg.style.cssText = "display:block;height:86vh;width:auto;max-width:62vw;" +
+  "object-fit:contain;background:#fff";
+hoverZoom.appendChild(hoverImg);
+document.body.appendChild(hoverZoom);
+let hoverTimer = null;
+function placeHoverZoom(e) {
+  const left = e.clientX < window.innerWidth / 2;   // kursor z lewej -> podglad z prawej
+  hoverZoom.style.left = left ? "auto" : "16px";
+  hoverZoom.style.right = left ? "16px" : "auto";
+}
+cards.addEventListener("mouseover", e => {
+  const img = e.target.closest(".thumb img");
+  if (!img || !cards.contains(img)) return;
+  hoverImg.src = img.src;
+  placeHoverZoom(e);
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => { hoverZoom.style.display = "block"; }, 120);
+});
+cards.addEventListener("mousemove", e => {
+  if (hoverZoom.style.display === "block") placeHoverZoom(e);
+});
+cards.addEventListener("mouseout", e => {
+  if (!e.target.closest(".thumb img")) return;
+  clearTimeout(hoverTimer);
+  hoverZoom.style.display = "none";
+});
+
 async function retryJob(id, el) {
   el.textContent = "...";
   const fd = optionsForm(new FormData());
