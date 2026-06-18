@@ -270,6 +270,10 @@ def worker():
                 job["editable"] = True
                 job["qa"] = qa
                 job["data"] = None
+                # podbij rev po KAZDEJ obrobce - cache-buster miniatury zawsze
+                # sie zmienia (inaczej po re-obrobce o podobnym czasie 'seconds'
+                # przegladarka pokazywala stary wynik, np. po 'Zamien link')
+                job["rev"] = (job.get("rev") or 0) + 1
         except Exception as e:
             with lock:
                 job["status"] = "error"
