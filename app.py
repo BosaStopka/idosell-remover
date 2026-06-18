@@ -141,7 +141,8 @@ def extract_product_id(stem: str) -> str:
 
 
 PERSIST_KEYS = ("id", "name", "status", "result", "error", "source",
-                "orig", "options", "seconds", "editable", "qa")
+                "orig", "options", "seconds", "editable", "qa", "kept",
+                "fashion", "rev")
 
 
 def persist_jobs():
@@ -177,6 +178,68 @@ def submit_job(name: str, data: bytes, options: dict, source: str = "upload") ->
     queue.put(job_id)
     persist_jobs()
     return job_id
+
+
+def submit_kept(product_id, idx, data: bytes, fashion: bool = False,
+                source: str = "idosell"):
+    """Zadanie 'ZOSTAWIONE' (nie obrabiane): wynik = ORYGINAL bez ciecia, zeby
+    bylo widoczne w Studio jako karta (kontrola - jak cos blednie uznane za
+    fashion, widac to i mozna nadpisac obrobka). BEZ maski -> wyrownanie barw
+    go pomija. fashion=True gdy auto-wykryte."""
+    from io import BytesIO
+
+    from PIL import Image
+    pid = str(product_id)
+    job_id = uuid.uuid4().hex[:12]
+    name = f"{pid}_{idx}.jpg"
+    rel = f"{pid}/{name}"
+    orig_file = f"{job_id}.jpg"
+    try:
+        (ORIGINALS_DIR / orig_file).write_bytes(data)
+    except OSError:
+        orig_file = None
+    (DONE_DIR / pid).mkdir(parents=True, exist_ok=True)
+    try:
+        Image.open(BytesIO(data)).convert("RGB").save(DONE_DIR / rel, "JPEG", quality=95)
+    except Exception:
+        return None
+    with lock:
+        jobs[job_id] = {
+            "id": job_id, "name": name, "status": "done", "result": rel,
+            "error": None, "source": source, "orig": orig_file, "data": None,
+            "options": {}, "seconds": 0, "editable": False, "rev": 1,
+            "kept": True, "fashion": bool(fashion),
+            "qa": {"ok": True, "issues": []},
+        }
+        job_order.append(job_id)
+    persist_jobs()
+    return job_id
+
+
+def _remove_product_job(product_id, idx) -> None:
+    """Usuwa zadanie JEDNEGO zdjecia (pid_idx) + pliki robocze - przed zmiana
+    decyzji/ponowna obrobka tego zdjecia (bez duplikatow kart w Studio)."""
+    target = f"{product_id}_{idx}"
+    removed = []
+    with lock:
+        rem = [jid for jid in list(job_order)
+               if jobs.get(jid) and jobs[jid].get("source") == "idosell"
+               and Path(jobs[jid].get("name", "")).stem == target]
+        for jid in rem:
+            j = jobs.pop(jid, None)
+            if jid in job_order:
+                job_order.remove(jid)
+            removed.append((jid, (j or {}).get("orig")))
+    for jid, orig in removed:
+        try:
+            if orig:
+                (ORIGINALS_DIR / orig).unlink(missing_ok=True)
+            (MASKS_DIR / f"{jid}.rgb.jpg").unlink(missing_ok=True)
+            (MASKS_DIR / f"{jid}.a.png").unlink(missing_ok=True)
+        except OSError:
+            pass
+    if removed:
+        persist_jobs()
 
 
 def qa_check(out_img, alpha, full_bleed: bool) -> dict:
@@ -365,7 +428,8 @@ def api_jobs():
             j = jobs[jid]
             out.append({k: j.get(k) for k in
                         ("id", "name", "status", "result", "error",
-                         "source", "orig", "seconds", "editable", "qa", "rev")})
+                         "source", "orig", "seconds", "editable", "qa", "rev",
+                         "kept", "fashion")})
     # wzbogac zadania IdoSell o pid/index/ikony z planu + kategoria/sezon/seria
     # i flage 'wyslane' - SERWEROWO, zeby Studio mialo dane do badge'y i filtrow
     # niezaleznie od idoMeta (ktore znika po odswiezeniu strony).
@@ -715,6 +779,8 @@ def _group_color_stats(pid: str) -> list:
                  and extract_product_id(Path(jobs[j]["name"]).stem) == pid]
     stats = []
     for j in group:
+        if j.get("kept") or j.get("fashion"):
+            continue   # zostawione/fashion NIE biora udzialu w wyrownaniu barw
         rgb_p = MASKS_DIR / f"{j['id']}.rgb.jpg"
         a_p = MASKS_DIR / f"{j['id']}.a.png"
         if not rgb_p.exists() or not a_p.exists() or not j.get("editable", True):
@@ -2067,13 +2133,18 @@ def idosell_product_process(product_id):
     created = []
     errors = []
     for i, d in enumerate(decisions, 1):
-        if d.get("action") != "process":
-            continue
+        act = d.get("action")
+        if act not in ("process", "keep"):
+            continue   # delete -> tylko w planie, bez karty
         idx = d.get("index", i)
         try:
             data = idosell_client.download_image(d["url"])
         except idosell_client.IdoSellError as e:
             errors.append(f"zdjecie {idx}: {e}")
+            continue
+        if act == "keep":
+            # zostawione -> widoczna karta (oryginal bez ciecia, bez maski)
+            submit_kept(product_id, idx, data, fashion=bool(d.get("fashion")))
             continue
         # mirror per zdjecie (standaryzacja kierunku noska)
         job_opts = {**options, "mirror": bool(d.get("mirror"))}
@@ -2116,12 +2187,15 @@ def _ido_process_default(product_id: int, options: dict) -> dict:
         action = "keep" if is_fashion else "process"
         decisions.append({"index": i + 1, "image_id": im["id"], "slot": im["slot"],
                           "url": im["url"], "action": action, "mirror": False,
+                          "fashion": is_fashion,
                           "icons": ["shop", "group"] if i == 0 else []})
         if action == "process" and data:
             submit_job(f"{product_id}_{i + 1}.jpg", data,
                        {**options, "mirror": False}, source="idosell")
             jobs_made += 1
-        elif action == "keep":
+        elif action == "keep" and data:
+            # fashion ZOSTAWIONE jako widoczna karta (oryginal, bez ciecia)
+            submit_kept(product_id, i + 1, data, fashion=True)
             kept += 1
     out_dir = DONE_DIR / str(product_id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2178,8 +2252,9 @@ def idosell_photo_action(product_id):
         dec["icons"] = []   # usuniete zdjecie nie moze byc ikona
     pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
                   encoding="utf-8")
+    _remove_product_job(product_id, idx)   # skasuj stara karte tego zdjecia
     queued = False
-    if action == "process":   # dokolejkuj obrobke tego jednego zdjecia
+    if action in ("process", "keep"):
         try:
             if dec.get("extra"):   # zdjecie dodane z dysku
                 data = (EXTRAS_DIR / dec["extra"]).read_bytes()
@@ -2187,9 +2262,13 @@ def idosell_photo_action(product_id):
                 data = idosell_client.download_image(dec["url"])
         except (idosell_client.IdoSellError, OSError) as e:
             return jsonify({"error": f"Pobranie zdjecia: {e}"}), 400
-        job_opts = {**options, "mirror": bool(dec.get("mirror"))}
-        submit_job(f"{product_id}_{idx}.jpg", data, job_opts, source="idosell")
-        queued = True
+        if action == "keep":
+            # zostawione -> widoczna karta (oryginal bez ciecia)
+            submit_kept(product_id, idx, data, fashion=bool(dec.get("fashion")))
+        else:   # process -> dokolejkuj obrobke tego jednego zdjecia
+            job_opts = {**options, "mirror": bool(dec.get("mirror"))}
+            submit_job(f"{product_id}_{idx}.jpg", data, job_opts, source="idosell")
+            queued = True
     return jsonify({"ok": True, "action": action, "queued": queued})
 
 
