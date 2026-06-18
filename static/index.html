@@ -995,6 +995,16 @@ function render() {
     if (!groups.has(pid)) groups.set(pid, []);
     groups.get(pid).push(j);
   }
+  // pasek akcji dla produktow zaznaczonych w Studio (te same operacje co w przegladarce)
+  if (selectedIdo.size) {
+    html += `<div class="group-head" style="position:sticky;top:0;z-index:5;background:var(--panel)">
+      <b style="color:var(--accent2)">Zaznaczone: ${selectedIdo.size}</b>
+      <span style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-primary" style="padding:6px 12px;font-size:12px" onclick="sendSelected([...selectedIdo])">📤 Wyślij zaznaczone</button>
+        <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px;color:var(--err);border-color:var(--err)" onclick="bulkRollback([...selectedIdo])">↩ Cofnij zaznaczone</button>
+        <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="selectedIdo.clear(); render()">× wyczyść</button>
+      </span></div>`;
+  }
   for (const [pid, gjobs] of groups) {
     const doneCount = gjobs.filter(j => j.status === "done").length;
     const flagged = gjobs.filter(j => j.status === "done" && j.qa && !j.qa.ok).length;
@@ -1007,6 +1017,7 @@ function render() {
     const allDone = doneCount === gjobs.length;
     html += `<div class="group-head">
       <button class="grp-toggle" onclick="toggleGroup('${esc(pid)}')" title="Zwiń / rozwiń">${collapsed ? "▸" : "▾"}</button>
+      ${isIdo ? `<input type="checkbox" title="Zaznacz produkt - zbiorcza wysyłka/cofnięcie w pasku powyżej" ${selectedIdo.has(String(pid)) ? "checked" : ""} onclick="event.stopPropagation(); toggleIdo('${esc(pid)}', this.checked); render();" style="width:16px;height:16px;accent-color:var(--accent)">` : ""}
       <h3>📁 ${esc(pid)}${meta.code ? ` · ${esc(meta.code)}` : ""}</h3>
       ${meta.executed ? `<span class="badge done" title="Galeria wysłana do IdoSell">✅ wysłane</span>` : ""}
       ${(meta.category && meta.category.length) ? `<span class="badge" title="Rodzaj (kategoria z IdoSell)">${esc(meta.category.join(", "))}</span>` : ""}
@@ -1054,6 +1065,17 @@ function render() {
             ${canRetry ? `<a href="#" onclick="retryJob('${j.id}', this); return false" title="Obrob ponownie z aktualnymi ustawieniami">↻ Ponów</a>` : ""}
             ${j.status === "done" ? `<a href="#" onclick="flipPhoto('${j.id}'); return false" title="Odbij lustrzanie gotowego zdjęcia (kierunek noska) - bez ponownej obróbki">⇄ Odbij</a>` : ""}
           </div>
+          ${j.source === "idosell" && j.status === "done" && j.pid ? `
+          <div class="order-row" style="margin-top:6px">
+            <button onclick="studioMove('${esc(j.pid)}',${j.photo_index},-1)" ${j.gallery_pos === 0 ? "disabled" : ""} title="Wcześniej w galerii">◀</button>
+            <span title="Pozycja w galerii">${(j.gallery_pos ?? 0) + 1}/${j.gallery_len || 1}</span>
+            <button onclick="studioMove('${esc(j.pid)}',${j.photo_index},1)" ${j.gallery_pos != null && j.gallery_pos >= (j.gallery_len - 1) ? "disabled" : ""} title="Później w galerii">▶</button>
+          </div>
+          <div class="icon-row" title="Przypnij to zdjęcie do slotu IdoSell (jedno na typ)">
+            <button class="${(j.icons || []).includes("shop") ? "on" : ""}" onclick="studioIcon('${esc(j.pid)}',${j.photo_index},'shop')" title="Główna miniaturka (lista towarów)">★ Lista</button>
+            <button class="${(j.icons || []).includes("group") ? "on" : ""}" onclick="studioIcon('${esc(j.pid)}',${j.photo_index},'group')">Grupa</button>
+            <button class="${(j.icons || []).includes("auction") ? "on" : ""}" onclick="studioIcon('${esc(j.pid)}',${j.photo_index},'auction')">Bez tła</button>
+          </div>` : ""}
           ${j.status === "error" ? `<span style="color:var(--err);font-size:12px">${esc(j.error || "")}</span>` : ""}
         </div></div>`;
     }
@@ -1555,6 +1577,21 @@ async function idoPlanCurate(fields) {
 }
 function idoPlanMove(index, dir) { idoPlanCurate({ op: "move", index, dir }); }
 function idoPlanIcon(index, type) { idoPlanCurate({ op: "icon", index, type }); }
+
+// kuracja PROSTO ze Studio (kafelek) - ten sam endpoint co w planie, odswieza zadania
+async function studioCurate(pid, fields) {
+  const fd = new FormData();
+  for (const k in fields) fd.append(k, fields[k]);
+  let data;
+  try {
+    const res = await api(`/api/idosell/products/${pid}/plan-curate`, { method: "POST", body: fd });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  if (data.error) { alert(data.error); return; }
+  lastJobsKey = ""; refresh();   // przerysuj kafelki ze swiezym stanem ikon/kolejnosci
+}
+function studioMove(pid, index, dir) { studioCurate(pid, { op: "move", index, dir }); }
+function studioIcon(pid, index, type) { studioCurate(pid, { op: "icon", index, type }); }
 
 // "Dodaj zdjecie z dysku" w oknie planu: zapisz do extras -> dopnij do planu
 // jako process + dokolejkuj obrobke -> auto-refresh okna gdy gotowe

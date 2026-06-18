@@ -361,6 +361,35 @@ def api_jobs():
             out.append({k: j.get(k) for k in
                         ("id", "name", "status", "result", "error",
                          "source", "orig", "seconds", "editable", "qa", "rev")})
+    # wzbogac zadania IdoSell o pid/index/ikony z planu - do kuracji w Studio
+    # (przypiecie do Lista/Grupa/Bez tla + kolejnosc, prosto na kafelku)
+    plan_cache = {}
+    for o in out:
+        if o.get("source") != "idosell" or o.get("status") != "done":
+            continue
+        stem = Path(o["name"]).stem
+        m = re.search(r"_(\d+)$", stem)
+        if not m:
+            continue
+        pid = extract_product_id(stem)
+        idx = int(m.group(1))
+        o["pid"] = pid
+        o["photo_index"] = idx
+        if pid not in plan_cache:
+            pf = DONE_DIR / pid / "plan.json"
+            try:
+                plan_cache[pid] = (json.loads(pf.read_text(encoding="utf-8"))
+                                   if pf.exists() else None)
+            except (json.JSONDecodeError, OSError):
+                plan_cache[pid] = None
+        plan = plan_cache[pid]
+        if plan:
+            decs = plan.get("decisions") or []
+            o["icons"] = next((d.get("icons") or [] for d in decs
+                               if d.get("index") == idx), [])
+            o["gallery_pos"] = next((i for i, d in enumerate(decs)
+                                     if d.get("index") == idx), None)
+            o["gallery_len"] = len(decs)
     return jsonify(out)
 
 
