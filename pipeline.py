@@ -14,7 +14,13 @@ DEFAULTS = {
     "max_upscale": 4.5,      # maks. powiekszenie malych zdjec (4.5: male zrodla
     #                          wypelniaja kadr; wyzsze = wiecej rozmycia)
     "shadow": True,          # cien wlaczony (master)
-    "shadow_mode": "auto",   # auto | preserve | minimal | none - patrz compose()
+    # minimal = jednolity kadr (crop+pad 90% + cien-kaluza) dla KAZDEGO zdjecia
+    # - spojny katalog, bez trybu ZACHOWAJ (ktory przy zlozonym tle potrafil
+    # zostawic szary pas). auto/preserve = zachowaj realny cien gdy jest.
+    "shadow_mode": "minimal",  # auto | preserve | minimal | none - patrz compose()
+    # True = zdjecia wypelniajace kadr (detal/zblizenie) zostaja 1:1 bez 90% i
+    # cienia; False = WSZYSTKO normalizowane do 90% + cien (spojnie) - zalecane
+    "full_bleed": False,
     "shadow_opacity": 0.30,  # krycie cienia-kaluzy (tryb minimal, gdy brak realnego)
     "shadow_blur": 11,       # (zachowane dla zgodnosci UI; kaluza liczy blur z wiekszego wymiaru)
     "shadow_detect_drop": 6.0,  # o ile pas pod podeszwa ciemniejszy od tla = realny cien
@@ -212,7 +218,8 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
     # PELNOKADROWE (detal/zblizenie wypelniajace kadr) tylko w glownym pipeline
     # (jest src_rgb). Edytor maski (compose_from, brak src_rgb) zawsze idzie
     # trybem minimal - patrz docstring compose_from.
-    full_bleed = src_rgb is not None and is_full_bleed(rgba)
+    full_bleed = (opt.get("full_bleed", False) and src_rgb is not None
+                  and is_full_bleed(rgba))
 
     # ---- PELNOKADROWE (zblizenie/detal): TYLKO biel, bez kwadratu i bez pasow --
     # Detal wypelniajacy kadr zostaje w ORYGINALNYM kadrze i proporcjach -
