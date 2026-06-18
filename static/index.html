@@ -994,6 +994,9 @@ const STATUS = {
 
 const QA_LBL = { tlo: "tło", maly: "za mały", proporcje: "proporcje", fragmenty: "fragmenty", pusta: "pusta maska" };
 let qaOnly = false, hideSent = false, studioCat = "", studioSeason = "";
+let studioSeries = "", studioSeriesName = "";   // filtr po serii (modelu) w Studio
+function setStudioSeries(id, name) { studioSeries = String(id); studioSeriesName = name || ("seria " + id); render(); }
+function clearStudioSeries() { studioSeries = ""; studioSeriesName = ""; render(); }
 const collapsedGroups = new Set();
 // pid -> {code, executed} z przegladarki produktow (Studio grupuje po numerycznym
 // ID; SKU/kod i status 'wyslane' bierzemy stad, jesli produkt byl wczytany)
@@ -1030,6 +1033,21 @@ function render() {
     if (!groups.has(pid)) groups.set(pid, []);
     groups.get(pid).push(j);
   }
+  // sortowanie po serii (modelu): warianty tego samego modelu obok siebie;
+  // bez serii (lub nie z IdoSell) ida na koniec, zachowujac kolejnosc
+  let groupEntries = [...groups.entries()];
+  groupEntries.sort((a, b) => {
+    const sa = (idoMeta[a[0]] || {}).series_name || "￿";
+    const sb = (idoMeta[b[0]] || {}).series_name || "￿";
+    return sa.localeCompare(sb) || String(a[0]).localeCompare(String(b[0]));
+  });
+  // chip filtra serii (modelu) - z badge'a w naglowku folderu
+  if (studioSeries) {
+    html += `<div class="group-head" style="background:var(--panel)">
+      <span class="badge" style="color:var(--accent2)">📦 Model: ${esc(studioSeriesName)}</span>
+      <a href="#" onclick="clearStudioSeries();return false" style="margin-left:8px;color:var(--muted)">× pokaż wszystkie</a>
+    </div>`;
+  }
   // pasek akcji dla produktow zaznaczonych w Studio (te same operacje co w przegladarce)
   if (selectedIdo.size) {
     html += `<div class="group-head" style="position:sticky;top:0;z-index:5;background:var(--panel)">
@@ -1040,12 +1058,13 @@ function render() {
         <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="selectedIdo.clear(); render()">× wyczyść</button>
       </span></div>`;
   }
-  for (const [pid, gjobs] of groups) {
+  for (const [pid, gjobs] of groupEntries) {
     const doneCount = gjobs.filter(j => j.status === "done").length;
     const flagged = gjobs.filter(j => j.status === "done" && j.qa && !j.qa.ok).length;
     if (qaOnly && !flagged) continue;   // filtr: tylko grupy z uwagami QA
     const meta = idoMeta[pid] || {};
     if (hideSent && meta.executed) continue;   // ukryj produkty juz wyslane
+    if (studioSeries && String(meta.series_id || "") !== studioSeries) continue;  // filtr po serii
     // filtr kategoria/sezon (z idoMeta z przegladarki) - grupy bez metadanych
     // pokazujemy zawsze, zeby nie chowac produktow ktorych jeszcze nie wczytano
     if (studioCat && (meta.category || []).length && !meta.category.includes(studioCat)) continue;
@@ -1061,6 +1080,7 @@ function render() {
       ${meta.executed ? `<span class="badge done" title="Galeria wysłana do IdoSell">✅ wysłane</span>` : ""}
       ${(meta.category && meta.category.length) ? `<span class="badge" title="Rodzaj (kategoria z IdoSell)">${esc(meta.category.join(", "))}</span>` : ""}
       ${(meta.season && meta.season.length) ? `<span class="badge" style="${meta.season.includes("zima") ? "color:#74b9ff;border:1px solid #74b9ff" : ""}" title="Pora roku (sezon z IdoSell)">${meta.season.includes("zima") ? "❄ " : ""}${esc(meta.season.join("/"))}</span>` : ""}
+      ${meta.series_id ? `<span class="badge" style="cursor:pointer;color:var(--accent2)" onclick="setStudioSeries('${esc(meta.series_id)}','${esc((meta.series_name||'').replace(/'/g,''))}')" title="Pokaż tylko ten model (serię)">📦 ${esc(meta.series_name || ("seria " + meta.series_id))}</span>` : ""}
       <span class="badge">${doneCount}/${gjobs.length} gotowych</span>
       ${flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ ${flagged} do przeglądu</span>`
                 : (allDone && doneCount ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">✓ QA OK</span>` : "")}
@@ -2177,7 +2197,8 @@ async function loadIdoProducts(reset) {
   const hideDone = $("idoHideDone").checked;
   for (const p of data.products) {
     idoMeta[String(p.id)] = { code: p.code || null, executed: !!p.executed,
-                              category: p.category || [], season: p.season || [] };
+                              category: p.category || [], season: p.season || [],
+                              series_id: p.series_id || null, series_name: p.series_name || "" };
     if (hideDone && (p.processed || p.executed)) continue;  // ukryj obrobione/wyslane
     const checked = selectedIdo.has(String(p.id)) ? "checked" : "";
     html += `<div class="card">
