@@ -611,6 +611,9 @@ def api_replace_url(job_id):
             return jsonify({"error": "Zadanie juz jest w kolejce"}), 409
         orig = job["orig"]
         options = dict(job.get("options") or {})
+        is_kept = bool(job.get("kept"))
+        result = job.get("result")
+        jname = job.get("name") or ""
     try:
         resp = rq.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code != 200:
@@ -624,6 +627,37 @@ def api_replace_url(job_id):
         (ORIGINALS_DIR / orig).write_bytes(content)
     except OSError as e:
         return jsonify({"error": str(e)}), 500
+    if is_kept and result:
+        # FASHION/zostawione: podmiana na lepsza wersje, ZOSTAJE 1:1 (bez modelu).
+        # Zapis wyniku 1:1 + plan -> action=process, by wysylka wrzucila LOKALNY
+        # plik (nowa, dobra wersja), a nie stare bajty ze sklepu. fashion=True
+        # zachowane (zdjecie dalej nie jest ciete).
+        try:
+            Image.open(BytesIO(content)).convert("RGB").save(
+                DONE_DIR / result, "JPEG", quality=95)
+        except Exception as e:
+            return jsonify({"error": f"Zapis wyniku: {e}"}), 500
+        stem = Path(jname).stem
+        m = re.search(r"_(\d+)$", stem)
+        if m:
+            pid, idx = extract_product_id(stem), int(m.group(1))
+            pf = DONE_DIR / pid / "plan.json"
+            if pf.exists():
+                try:
+                    plan = json.loads(pf.read_text(encoding="utf-8"))
+                    for d in plan.get("decisions", []):
+                        if d.get("index") == idx:
+                            d["action"] = "process"   # wysylka: lokalny plik 1:1
+                            d["fashion"] = True
+                    pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
+                                  encoding="utf-8")
+                except (json.JSONDecodeError, OSError):
+                    pass
+        with lock:
+            job["src_w"], job["src_h"] = w, h
+            job["rev"] = (job.get("rev") or 0) + 1   # cache-buster miniatury
+        persist_jobs()
+        return jsonify({"ok": True, "w": w, "h": h, "kept": True})
     with lock:
         job.update(status="queued", error=None, result=None, seconds=None,
                    data=None, options=options)

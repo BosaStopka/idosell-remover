@@ -857,7 +857,8 @@ async function replaceUrl(jobId) {
     data = await res.json();
   } catch { data = { error: "Błąd połączenia" }; }
   if (data.error) { alert(data.error); return; }
-  startPolling();   // nowe zrodlo (${data.w}x${data.h}) w obrobce
+  lastJobsKey = "";   // wymus przerysowanie (kept: nowy rev = nowa miniatura)
+  startPolling();   // nowe zrodlo (${data.w}x${data.h}); obrobione -> w kolejce
 }
 
 // "Obrob mimo to" - zdjecie wykryte (blednie) jako fashion: skasuj karte
@@ -1311,7 +1312,8 @@ function render() {
           </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             ${j.status === "done" ? `<a href="/done/${j.result}" download>Pobierz JPG</a>` : ""}
-            ${j.kept ? `<a href="#" onclick="processAnyway('${esc(j.pid || pid)}', ${j.photo_index}); return false" title="To NIE jest fashion - obrób je mimo wszystko (wytnij tło)">🪄 Obrób mimo to</a>`
+            ${j.kept ? `<a href="#" onclick="processAnyway('${esc(j.pid || pid)}', ${j.photo_index}); return false" title="To NIE jest fashion - obrób je mimo wszystko (wytnij tło)">🪄 Obrób mimo to</a>
+              ${j.orig ? `<a href="#" onclick="replaceUrl('${j.id}'); return false" title="Podmień to zdjęcie fashion na lepszą wersję z linku (np. ta sama fotka w dobrej jakości z innego produktu). ZOSTAJE 1:1, bez wycinania tła.">🔗 Zamień (link)</a>` : ""}`
               : `${canRetry ? `<a href="#" onclick="retryJob('${j.id}', this); return false" title="Obrob ponownie z aktualnymi ustawieniami">↻ Ponów</a>` : ""}
                  ${j.status === "done" ? `<a href="#" onclick="flipPhoto('${j.id}'); return false" title="Odbij lustrzanie gotowego zdjęcia (kierunek noska) - bez ponownej obróbki">⇄ Odbij</a>` : ""}
                  ${(j.status === "done" || j.status === "error") && j.orig ? `<a href="#" onclick="replaceUrl('${j.id}'); return false" title="Podmień źródło na lepsze zdjęcie z linku (np. wyższa rozdzielczość) i przerób ponownie">🔗 Zamień (link)</a>` : ""}`}
