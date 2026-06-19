@@ -510,7 +510,8 @@
       <div class="toolbar">
         <button class="btn btn-ghost" id="zipBtn">⬇ Pobierz wszystko (ZIP)</button>
         <button class="btn btn-ghost" id="clearBtn">🧹 Wyczyść zakończone</button>
-        <button class="btn btn-ghost" id="recomposeAllBtn" title="Zastosuj poprawiony pipeline (np. korekta bieli) do wszystkich obrobionych - bez modelu, z masek. Nadpisuje wyniki lokalnie.">♻ Przelicz ponownie (bez modelu)</button>
+        <button class="btn btn-ghost" id="studioSelectAll" title="Zaznacz wszystkie produkty IdoSell widoczne w Studio (do zbiorczej obróbki ponownej / wysyłki)">☑ Zaznacz wszystkie</button>
+        <button class="btn btn-ghost" id="recomposeAllBtn" title="Zastosuj poprawiony pipeline (np. korekta bieli) do wszystkich obrobionych - bez modelu, z masek. NIE naprawia koloru Adobe RGB (do tego: Obrób ponownie). Nadpisuje wyniki lokalnie.">♻ Przelicz ponownie (bez modelu)</button>
         <button class="btn btn-ghost hidden" id="stopBtn" style="color:var(--err);border-color:var(--err)">⏹ Stop kolejki</button>
       </div>
       <div class="toolbar">
@@ -1235,6 +1236,7 @@ function render() {
     html += `<div class="group-head" style="position:sticky;top:0;z-index:5;background:var(--panel)">
       <b style="color:var(--accent2)">Zaznaczone: ${selectedIdo.size}</b>
       <span style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="reprocessSelected([...selectedIdo])" title="Obrób PONOWNIE zaznaczone od nowa (poprawny kolor sRGB + aktualne ustawienia, oryginały z archiwum) - paczkami, postęp w pasku kolejki u góry">🔄 Obrób ponownie</button>
         <button class="btn btn-primary" style="padding:6px 12px;font-size:12px" onclick="sendSelected([...selectedIdo])">📤 Wyślij zaznaczone</button>
         <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px;color:var(--err);border-color:var(--err)" onclick="bulkRollback([...selectedIdo])">↩ Cofnij zaznaczone</button>
         <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="selectedIdo.clear(); render()">× wyczyść</button>
@@ -1258,7 +1260,7 @@ function render() {
     const allDone = doneCount === gjobs.length;
     html += `<div class="group-head">
       <button class="grp-toggle" onclick="toggleGroup('${esc(pid)}')" title="Zwiń / rozwiń">${collapsed ? "▸" : "▾"}</button>
-      ${isIdo ? `<input type="checkbox" title="Zaznacz produkt - zbiorcza wysyłka/cofnięcie w pasku powyżej" ${selectedIdo.has(String(pid)) ? "checked" : ""} onclick="event.stopPropagation(); toggleIdo('${esc(pid)}', this.checked); render();" style="width:16px;height:16px;accent-color:var(--accent)">` : ""}
+      ${isIdo ? `<input type="checkbox" class="studio-grp-cb" data-pid="${esc(pid)}" title="Zaznacz produkt - zbiorcza obróbka ponowna/wysyłka/cofnięcie w pasku powyżej" ${selectedIdo.has(String(pid)) ? "checked" : ""} onclick="event.stopPropagation(); toggleIdo('${esc(pid)}', this.checked); render();" style="width:16px;height:16px;accent-color:var(--accent)">` : ""}
       <h3>📁 ${isIdo ? `<a href="${IDO_PANEL}${esc(pid)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none" title="Otwórz produkt w panelu IdoSell">${esc(pid)} ↗</a>` : esc(pid)}${meta.code ? ` · ${esc(meta.code)}` : ""}</h3>
       ${meta.executed ? `<span class="badge done" title="Galeria wysłana do IdoSell">✅ wysłane</span>` : ""}
       ${(meta.category && meta.category.length) ? `<span class="badge" title="Rodzaj (kategoria z IdoSell)">${esc(meta.category.join(", "))}</span>` : ""}
@@ -2097,16 +2099,14 @@ $("idoBatchBtn").addEventListener("click", () => {
   selectedIdo.clear(); toggleIdo("", false);
   openNextInBatch();
 });
-$("idoBatchAllBtn").addEventListener("click", async () => {
-  const ids = [...selectedIdo];
+// Masowa obrobka PACZKAMI + THROTTLING po glebokosci kolejki. Wielkie zadanie
+// (serwer pobiera oryginaly synchronicznie per ID + worker mieli rownolegle)
+// zrywalo polaczenie/ubijalo proces. Tu: kolejkujemy po troche i czekamy az
+// kolejka zejdzie ponizej progu (ochrona RAM serwera). btn opcjonalny (postep).
+async function runBulkProcess(ids, btn) {
   if (!ids.length) return;
-  if (!confirm(`Obrobić WSZYSTKIE zdjęcia ${ids.length} produktów bez okna wyboru? Oryginały trafią do archiwum na D:, wyniki na dysk (nic nie idzie jeszcze do IdoSell).`)) return;
-  const btn = $("idoBatchAllBtn");
-  btn.disabled = true;
-  // MALE paczki + THROTTLING po glebokosci kolejki. Wielkie zadanie (serwer
-  // pobiera oryginaly synchronicznie per ID + worker mieli rownolegle) zrywalo
-  // polaczenie/ubijalo proces. Tu: kolejkujemy po troche i czekamy az kolejka
-  // zejdzie ponizej progu, by nie zalewac workera (ochrona RAM serwera).
+  const orig = btn ? btn.textContent : null;
+  if (btn) btn.disabled = true;
   const CHUNK = 6, MAX_INFLIGHT = 30;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   async function queueLoad() {
@@ -2117,14 +2117,13 @@ $("idoBatchAllBtn").addEventListener("click", async () => {
   }
   let ok = 0, failed = 0, totalJobs = 0, sentTab = false;
   for (let i = 0; i < ids.length; i += CHUNK) {
-    // throttle - poczekaj az worker przemieli zaleglosci
     let guard = 0;
     while (await queueLoad() > MAX_INFLIGHT && guard++ < 150) {
-      btn.textContent = `Czekam na obróbkę (${i}/${ids.length})...`;
+      if (btn) btn.textContent = `Czekam na obróbkę (${i}/${ids.length})...`;
       await sleep(2000);
     }
     const part = ids.slice(i, i + CHUNK);
-    btn.textContent = `Kolejkowanie ${Math.min(i + part.length, ids.length)}/${ids.length}...`;
+    if (btn) btn.textContent = `Kolejkowanie ${Math.min(i + part.length, ids.length)}/${ids.length}...`;
     const fd = optionsForm(new FormData());
     fd.append("product_ids", JSON.stringify(part));
     try {
@@ -2142,12 +2141,33 @@ $("idoBatchAllBtn").addEventListener("click", async () => {
       await sleep(1500);
     }
   }
-  btn.disabled = false;
+  if (btn) { btn.disabled = false; if (orig) btn.textContent = orig; }
   selectedIdo.clear(); toggleIdo("", false);
   loadIdoProducts(true);
   alert(`Zakończono kolejkowanie.\nZakolejkowano produktów: ${ok}` +
         (failed ? `\nNieudane: ${failed} (bez zdjęć / blip połączenia - można ponowić).` : ""));
+}
+$("idoBatchAllBtn").addEventListener("click", () => {
+  const ids = [...selectedIdo];
+  if (!ids.length) return;
+  if (!confirm(`Obrobić WSZYSTKIE zdjęcia ${ids.length} produktów bez okna wyboru? Oryginały trafią do archiwum na D:, wyniki na dysk (nic nie idzie jeszcze do IdoSell).`)) return;
+  runBulkProcess(ids, $("idoBatchAllBtn"));
 });
+// Studio: obrob PONOWNIE zaznaczone (np. korekta koloru Adobe RGB->sRGB).
+// Postep widac w pasku kolejki u gory. Oryginaly z archiwum.
+function reprocessSelected(ids) {
+  if (!ids.length) return;
+  if (!confirm(`Obrobić PONOWNIE ${ids.length} produktów od nowa?\n\nZ poprawnym kolorem (sRGB) i aktualnymi ustawieniami, oryginały z archiwum. Nic nie idzie jeszcze do IdoSell. Postęp w pasku kolejki u góry.`)) return;
+  runBulkProcess(ids, null);
+}
+// Studio: zaznacz wszystkie widoczne produkty IdoSell (respektuje filtry)
+function studioSelectAll() {
+  document.querySelectorAll(".studio-grp-cb").forEach(cb => {
+    if (!cb.checked) { cb.checked = true; toggleIdo(cb.dataset.pid, true); }
+  });
+  render();
+}
+$("studioSelectAll").addEventListener("click", studioSelectAll);
 
 // ---------- edytor maski (pędzel) ----------
 const ed = {
