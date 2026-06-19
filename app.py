@@ -53,6 +53,8 @@ inference_busy = threading.Event()  # gdy ustawione, skan tla pauzuje
 low_ram_pause = threading.Event()   # obrobka wstrzymana - za malo RAM
 MIN_RAM_GB = 1.2                    # prog wstrzymania obrobki
 LOWRES_MAX_PX = 800                 # zrodlo ponizej tego (dluzszy bok) = "male zrodlo"
+JOB_TIMEOUT_S = 600                 # watchdog: zadanie dluzsze = uznane za zawieszone
+#                                     (zdrowa maszyna ~30s; 600s tylko realne zawieszki)
 
 
 def free_ram_gb() -> float:
@@ -308,8 +310,27 @@ def worker():
                 raise RuntimeError("Brak danych wejsciowych zadania")
             t0 = time.time()
             inference_busy.set()  # wstrzymaj skan na czas inferencji (RAM)
-            img, work_rgb, work_alpha, full_bleed = pipeline.process_bytes(
-                data, job["options"], with_parts=True)
+            # WATCHDOG: inferencji onnxruntime nie da sie przerwac w tym samym
+            # watku - liczymy ja w watku pobocznym z limitem czasu. Po przekro-
+            # czeniu: blad zadania, worker leci dalej (zawieszony watek zostaje
+            # daemonem). Przy nocnym batchu jeden zly obraz nie zatrzyma calosci.
+            _box = {}
+
+            def _run(_d=data, _o=job["options"], _b=_box):
+                try:
+                    _b["r"] = pipeline.process_bytes(_d, _o, with_parts=True)
+                except BaseException as _e:   # noqa: BLE001 - przekazujemy dalej
+                    _b["e"] = _e
+            _t = threading.Thread(target=_run, daemon=True)
+            _t.start()
+            _t.join(JOB_TIMEOUT_S)
+            if _t.is_alive():
+                raise RuntimeError(
+                    f"Przekroczono limit obrobki ({JOB_TIMEOUT_S}s) - pominiete "
+                    "(zawieszona inferencja). Mozna ponowic.")
+            if "e" in _box:
+                raise _box["e"]
+            img, work_rgb, work_alpha, full_bleed = _box["r"]
             stem = Path(job["name"]).stem
             pid = extract_product_id(stem)
             out_dir = DONE_DIR / pid
