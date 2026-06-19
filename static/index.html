@@ -809,7 +809,7 @@ cards.addEventListener("mouseover", e => {
   hoverImg.src = img.src;
   placeHoverZoom(e);
   clearTimeout(hoverTimer);
-  hoverTimer = setTimeout(() => { hoverZoom.style.display = "block"; }, 120);
+  hoverTimer = setTimeout(() => { hoverZoom.style.display = "block"; }, 700);
 });
 cards.addEventListener("mousemove", e => {
   if (hoverZoom.style.display === "block") placeHoverZoom(e);
