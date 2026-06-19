@@ -491,6 +491,24 @@ def api_jobs():
     return jsonify(out)
 
 
+@app.get("/api/queue")
+def api_queue():
+    """Lekki status kolejki do paska: ile czeka/w obrobce, co teraz, mediana
+    czasu zadania (do ETA). Bez ciezkiego wzbogacania jak /api/jobs."""
+    with lock:
+        queued = sum(1 for jid in job_order if jobs[jid]["status"] == "queued")
+        proc = [jobs[jid] for jid in job_order if jobs[jid]["status"] == "processing"]
+        done_secs = [jobs[jid].get("seconds") for jid in job_order
+                     if jobs[jid]["status"] == "done" and jobs[jid].get("seconds")]
+    cur = proc[0]["name"] if proc else None
+    recent = [s for s in done_secs if s][-40:]   # ostatnie 40 do mediany
+    med = sorted(recent)[len(recent) // 2] if recent else None
+    remaining = queued + len(proc)
+    eta = int(remaining * med) if (med and remaining) else None
+    return jsonify({"queued": queued, "processing": len(proc), "current": cur,
+                    "median_seconds": med, "remaining": remaining, "eta_seconds": eta})
+
+
 @app.post("/api/clear")
 def api_clear():
     with lock:

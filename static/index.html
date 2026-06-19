@@ -434,7 +434,8 @@
     <button class="tab" data-tab="idosell">IdoSell</button>
     <button class="tab" data-tab="allegro">Allegro</button>
   </nav>
-  <span id="ramBadge" class="badge" style="margin-left:16px" title="Wolna pamięć RAM - model potrzebuje ~2 GB">RAM: ...</span>
+  <span id="queueBadge" class="badge hidden" style="margin-left:16px" title="Kolejka obróbki - ile zdjęć czeka/w trakcie + szacowany czas do końca"></span>
+  <span id="ramBadge" class="badge" style="margin-left:10px" title="Wolna pamięć RAM - model potrzebuje ~2 GB">RAM: ...</span>
 </header>
 
 <main>
@@ -2639,6 +2640,24 @@ async function ramStatus() {
 }
 setInterval(ramStatus, 5000);
 ramStatus();
+
+// pasek statusu kolejki obrobki + ETA (zawsze aktualny, niezaleznie od pollingu)
+async function queueStatus() {
+  let q;
+  try { const r = await api("/api/queue"); q = await r.json(); } catch { return; }
+  const el = $("queueBadge");
+  if (!q.remaining) { el.classList.add("hidden"); return; }
+  const e = q.eta_seconds;
+  const eta = e == null ? "" :
+    e >= 3600 ? ` · ~${Math.round(e / 360) / 10} h do końca` :
+    e >= 60 ? ` · ~${Math.ceil(e / 60)} min do końca` : ` · ~${e}s do końca`;
+  const cur = q.current ? ` (${q.current.replace(/\.jpg$/i, "")})` : "";
+  el.textContent = `⏳ kolejka: ${q.remaining}${cur}${eta}`;
+  el.style.color = "var(--accent2)"; el.style.border = "1px solid var(--accent2)";
+  el.classList.remove("hidden");
+}
+setInterval(queueStatus, 3000);
+queueStatus();
 
 // start: sprawdz czy zalogowany
 (async () => {
