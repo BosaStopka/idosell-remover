@@ -510,6 +510,8 @@
       <div class="toolbar">
         <button class="btn btn-ghost" id="zipBtn">⬇ Pobierz wszystko (ZIP)</button>
         <button class="btn btn-ghost" id="clearBtn">🧹 Wyczyść zakończone</button>
+        <button class="btn btn-ghost" onclick="collapseAll(true)" title="Zwiń wszystkie produkty (przy dużej liczbie - łatwiejsza nawigacja)">▸ Zwiń wszystkie</button>
+        <button class="btn btn-ghost" onclick="collapseAll(false)" title="Rozwiń wszystkie produkty">▾ Rozwiń wszystkie</button>
         <button class="btn btn-ghost" id="studioSelectAll" title="Zaznacz wszystkie produkty IdoSell widoczne w Studio (do zbiorczej obróbki ponownej / wysyłki)">☑ Zaznacz wszystkie</button>
         <button class="btn btn-ghost" id="recomposeAllBtn" title="Zastosuj poprawiony pipeline (np. korekta bieli) do wszystkich obrobionych - bez modelu, z masek. NIE naprawia koloru Adobe RGB (do tego: Obrób ponownie). Nadpisuje wyniki lokalnie.">♻ Przelicz ponownie (bez modelu)</button>
         <button class="btn btn-ghost hidden" id="stopBtn" style="color:var(--err);border-color:var(--err)">⏹ Stop kolejki</button>
@@ -1196,6 +1198,16 @@ function studioMeta(pid, gjobs) {
 function toggleGroup(pid) {
   if (collapsedGroups.has(pid)) collapsedGroups.delete(pid);
   else collapsedGroups.add(pid);
+  render();
+}
+// zwin/rozwin WSZYSTKIE grupy (przy duzej liczbie produktow - nawigacja)
+function collapseAll(collapse) {
+  if (collapse) {
+    const pidOf = n => { const s = (n || "").replace(/\.[^.]+$/, ""); const m = s.match(/^(.+?)_\d+$/); return m ? m[1] : s; };
+    for (const j of lastJobs) collapsedGroups.add(pidOf(j.name));
+  } else {
+    collapsedGroups.clear();
+  }
   render();
 }
 
