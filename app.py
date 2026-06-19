@@ -589,20 +589,14 @@ def api_flip(job_id):
     return jsonify({"ok": True, "mirror": mirror, "rev": job["rev"]})
 
 
-@app.post("/api/jobs/<job_id>/replace-url")
-def api_replace_url(job_id):
-    """Podmiana ZRODLA zadania na obraz spod URL (np. ta sama fotka w wyzszej
-    rozdzielczosci, wskazana recznie) i ponowna obrobka w miejscu - zachowuje
-    opcje/mirror. Bezpieczne: to UZYTKOWNIK wskazuje wlasciwy link, wiec nie ma
-    ryzyka zlego dopasowania."""
+def _replace_job_image(job_id, content):
+    """Podmiana obrazu zadania danymi bajtami (z URL albo z dysku).
+    - zadanie KEPT (fashion): zapis 1:1 bez modelu + plan -> action=process
+      (fashion=True), by wysylka wrzucila LOKALNY plik 1:1, nie stare bajty;
+    - zadanie obrobione: re-kolejka (przerobienie nowego zrodla).
+    To UZYTKOWNIK wskazuje wlasciwy obraz, wiec brak ryzyka zlego dopasowania."""
     from io import BytesIO
-
-    import requests as rq
     from PIL import Image
-    body = request.get_json(silent=True) or {}
-    url = (body.get("url") or "").strip()
-    if not url.startswith(("http://", "https://")):
-        return jsonify({"error": "Podaj poprawny adres http(s)"}), 400
     with lock:
         job = jobs.get(job_id)
         if not job or not job.get("orig"):
@@ -615,23 +609,15 @@ def api_replace_url(job_id):
         result = job.get("result")
         jname = job.get("name") or ""
     try:
-        resp = rq.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code != 200:
-            return jsonify({"error": f"Pobranie nieudane ({resp.status_code})"}), 400
-        content = resp.content
         with Image.open(BytesIO(content)) as im:   # walidacja: czy to obraz
             w, h = im.size
     except Exception as e:
-        return jsonify({"error": f"Nie udalo sie pobrac obrazu: {e}"}), 400
+        return jsonify({"error": f"To nie jest poprawny obraz: {e}"}), 400
     try:
         (ORIGINALS_DIR / orig).write_bytes(content)
     except OSError as e:
         return jsonify({"error": str(e)}), 500
     if is_kept and result:
-        # FASHION/zostawione: podmiana na lepsza wersje, ZOSTAJE 1:1 (bez modelu).
-        # Zapis wyniku 1:1 + plan -> action=process, by wysylka wrzucila LOKALNY
-        # plik (nowa, dobra wersja), a nie stare bajty ze sklepu. fashion=True
-        # zachowane (zdjecie dalej nie jest ciete).
         try:
             Image.open(BytesIO(content)).convert("RGB").save(
                 DONE_DIR / result, "JPEG", quality=95)
@@ -665,6 +651,37 @@ def api_replace_url(job_id):
     queue.put(job_id)
     persist_jobs()
     return jsonify({"ok": True, "w": w, "h": h})
+
+
+@app.post("/api/jobs/<job_id>/replace-url")
+def api_replace_url(job_id):
+    """Podmiana zrodla zadania na obraz spod URL (link wskazany recznie)."""
+    import requests as rq
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return jsonify({"error": "Podaj poprawny adres http(s)"}), 400
+    try:
+        resp = rq.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code != 200:
+            return jsonify({"error": f"Pobranie nieudane ({resp.status_code})"}), 400
+        content = resp.content
+    except Exception as e:
+        return jsonify({"error": f"Nie udalo sie pobrac obrazu: {e}"}), 400
+    return _replace_job_image(job_id, content)
+
+
+@app.post("/api/jobs/<job_id>/replace-file")
+def api_replace_file(job_id):
+    """Podmiana zrodla zadania na plik z dysku (upload). Jak replace-url, tylko
+    obraz przychodzi z dysku - dziala tez dla kart fashion (zostaje 1:1)."""
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "Brak pliku"}), 400
+    content = f.read()
+    if not content:
+        return jsonify({"error": "Pusty plik"}), 400
+    return _replace_job_image(job_id, content)
 
 
 @app.post("/api/jobs/stop")
