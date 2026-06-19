@@ -2629,6 +2629,7 @@ def idosell_add_url(product_id):
 
 IDO_AUDIT_FILE = BASE / "idosell_audit.jsonl"
 IDO_ORIGINALS_DIR = ORIGINALS_DIR / "idosell"
+LOWRES_SENT_LOG = BASE / "lowres_sent.jsonl"   # male zrodla, ktore poszly do sklepu
 
 
 def ido_backup_root():
@@ -2716,6 +2717,27 @@ def idosell_audit_list():
         return jsonify([])
     lines = IDO_AUDIT_FILE.read_text(encoding="utf-8").strip().splitlines()
     return jsonify([json.loads(x) for x in lines[-50:]][::-1])
+
+
+@app.get("/api/idosell/lowres-log")
+def idosell_lowres_log():
+    """Lista zdjec z MALYM zrodlem, ktore poszly do sklepu (worklist do poprawy).
+    Deduplikacja po (produkt, index) - liczy sie najnowszy wpis."""
+    if not LOWRES_SENT_LOG.exists():
+        return jsonify({"items": [], "total": 0})
+    latest = {}
+    for line in LOWRES_SENT_LOG.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        latest[(e.get("product_id"), e.get("index"))] = e
+    items = sorted(latest.values(), key=lambda x: x.get("sent_at") or "",
+                   reverse=True)
+    return jsonify({"items": items, "total": len(items)})
 
 
 def load_ido_plan(product_id: int) -> dict:
@@ -2839,6 +2861,42 @@ class IdoExecError(Exception):
         self.status = status
 
 
+def _log_lowres_sent(product_id: int, preview: dict, sent_at: str) -> int:
+    """Loguje zdjecia z MALYM zrodlem (dluzszy bok < LOWRES_MAX_PX), ktore
+    POSZLY do sklepu - zbiera sie lista 'do poprawy' (znalezc lepsze zrodlo,
+    podmienic, doslac). Append-only do LOWRES_SENT_LOG."""
+    from PIL import Image as _Img
+    pid = str(product_id)
+    entries = []
+    for item in preview.get("items", []):
+        if item.get("action") == "delete":
+            continue
+        idx = item.get("index")
+        with lock:
+            jid = next((j for j in job_order
+                        if jobs[j].get("name") == f"{pid}_{idx}.jpg"), None)
+            sw = jobs[jid].get("src_w") if jid else None
+            sh = jobs[jid].get("src_h") if jid else None
+            orig = jobs[jid].get("orig") if jid else None
+        if sw is None and orig:   # nie policzone wczesniej - z pliku oryginalu
+            try:
+                with _Img.open(ORIGINALS_DIR / orig) as im:
+                    sw, sh = im.size
+            except Exception:
+                continue
+        if sw and sh and max(sw, sh) < LOWRES_MAX_PX:
+            entries.append({"product_id": product_id, "index": idx,
+                            "src_w": sw, "src_h": sh, "sent_at": sent_at})
+    if entries:
+        try:
+            with LOWRES_SENT_LOG.open("a", encoding="utf-8") as f:
+                for e in entries:
+                    f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    return len(entries)
+
+
 def _ido_execute_one(product_id: int) -> dict:
     """Rdzen zapisu planu W SKLEPIE dla jednego produktu: backup na dysk,
     PUT galerii w sloty 1..N (bez okna z pusta galeria), kasowanie
@@ -2943,6 +3001,7 @@ def _ido_execute_one(product_id: int) -> dict:
     plan["executed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     plan["verified"] = verify
     save_ido_plan(product_id, plan)
+    lowres_sent = _log_lowres_sent(product_id, preview, plan["executed_at"])
     ido_audit("execute_plan", product_id, {
         "uploaded": uploaded,
         "kept": sum(1 for i in preview["items"] if i["action"] == "keep"),
@@ -2951,10 +3010,12 @@ def _ido_execute_one(product_id: int) -> dict:
         "final_count": final_count,
         "backup_count": len(backup),
         "verified": verify,
+        "lowres_sent": lowres_sent,
     })
     return {"ok": True, "uploaded": uploaded,
             "final_count": final_count, "verify": verify,
             "icons_set": sorted(icons_b64), "archive": archive,
+            "lowres_sent": lowres_sent,
             "executed_at": plan["executed_at"]}
 
 

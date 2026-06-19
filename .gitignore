@@ -31,3 +31,4 @@ samples/
 # logi serwera (debug)
 _server.err.log
 _server.out.log
+lowres_sent.jsonl
