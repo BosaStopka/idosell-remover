@@ -564,6 +564,7 @@
         <button class="btn btn-ghost" id="idoScanBtn">🔍 Skanuj tła produktów</button>
         <span id="idoScanInfo" style="font-size:13px;color:var(--muted)"></span>
         <button class="btn btn-ghost" id="idoSelectAll" title="Zaznacz wszystkie widoczne produkty (np. cała seria/model po wyszukaniu)">☑ Zaznacz widoczne</button>
+        <button class="btn btn-ghost" id="idoSelectMatching" title="Zaznacz WSZYSTKIE produkty pasujące do filtra - ze wszystkich stron (do dużych paczek, np. 500 na noc)">🗂 Zaznacz wszystkie pasujące</button>
         <button class="btn btn-primary hidden" id="idoBatchBtn" title="Otwiera wybór zdjęć PO KOLEI dla każdego - decydujesz co obrobić/zostawić/usunąć">🪄 Obrób zaznaczone</button>
         <button class="btn btn-ghost hidden" id="idoBatchAllBtn" title="Obrób WSZYSTKIE zdjęcia zaznaczonych bez okna wyboru (szybko, do dużych paczek)">⚡ bez wyboru</button>
         <button class="btn btn-ghost hidden" id="idoSendBtn" title="Wyślij do IdoSell tylko zaznaczone obrobione produkty (z potwierdzeniem; nieobrobione zgłoszą błąd)">📤 Wyślij zaznaczone</button>
@@ -2431,13 +2432,12 @@ $("idoSeriesPick").addEventListener("change", e => {
   else exitSeries();
 });
 
-async function loadIdoProducts(reset) {
-  if (reset) { idoOffset = 0; $("idoProducts").innerHTML = `<div class="empty">Ładowanie...</div>`; }
-  const limit = parseInt($("idoLimit").value) || 20;
-  const params = new URLSearchParams({ offset: idoOffset, limit });
+// buduje {endpoint, params} dla biezacego filtra przegladarki - wspolne dla
+// listowania i "zaznacz wszystkie pasujace"
+function idoQueryParams(offset, limit) {
+  const params = new URLSearchParams({ offset, limit });
   let endpoint = "/api/idosell/products";
   const vm = $("idoViewMode").value;
-  $("idoState").classList.toggle("hidden", vm !== "mine");
   if (idoSeriesFilter) {            // caly model - ignoruj pozostale filtry
     params.set("series", idoSeriesFilter.id);
     params.set("sort", $("idoSort").value);
@@ -2452,6 +2452,14 @@ async function loadIdoProducts(reset) {
     if ($("idoCategory").value) params.set("category", $("idoCategory").value);
     if (vm === "mine") { params.set("view", "mine"); params.set("state", $("idoState").value); }
   }
+  return { endpoint, params };
+}
+
+async function loadIdoProducts(reset) {
+  if (reset) { idoOffset = 0; $("idoProducts").innerHTML = `<div class="empty">Ładowanie...</div>`; }
+  const limit = parseInt($("idoLimit").value) || 20;
+  $("idoState").classList.toggle("hidden", $("idoViewMode").value !== "mine");
+  const { endpoint, params } = idoQueryParams(idoOffset, limit);
   let data;
   try {
     const res = await api(`${endpoint}?${params}`);
@@ -2591,6 +2599,30 @@ $("idoSelectAll").addEventListener("click", () => {
   if (!cbs.length) return;
   cbs.forEach(cb => { if (!cb.checked) { cb.checked = true; toggleIdo(cb.dataset.id, true); } });
 });
+// zaznacz WSZYSTKIE pasujace do filtra (wszystkie strony) - przewija endpoint i
+// zbiera ID, bez renderowania kart. Do duzych batchy (np. 500 na noc).
+async function selectAllMatching() {
+  if (!confirm("Zaznaczyć WSZYSTKIE produkty pasujące do bieżącego filtra (wszystkie strony)? Przy dużej liczbie potrwa chwilę.")) return;
+  const btn = $("idoSelectMatching"); const orig = btn.textContent; btn.disabled = true;
+  let offset = 0, total = null, guard = 0;
+  while (guard++ < 100) {              // bezpiecznik 100*100 = 10000
+    const { endpoint, params } = idoQueryParams(offset, 100);
+    let data;
+    try { const res = await api(`${endpoint}?${params}`); data = await res.json(); }
+    catch { break; }
+    const prods = (data && data.products) || [];
+    if (!prods.length) break;
+    for (const p of prods) selectedIdo.add(String(p.id));
+    total = data.total; offset += prods.length;
+    btn.textContent = `Zaznaczam... ${selectedIdo.size}`;
+    if (total != null && offset >= total) break;
+  }
+  btn.disabled = false; btn.textContent = orig;
+  toggleIdo("", false);          // odswiez liczniki przyciskow paczki
+  loadIdoProducts(true);         // przerysuj strone z zaznaczeniami
+  alert(`Zaznaczono: ${selectedIdo.size} produktów.\nTeraz "⚡ bez wyboru" (obróbka) albo "Wyślij zaznaczone".`);
+}
+$("idoSelectMatching").addEventListener("click", selectAllMatching);
 $("idoSearchBtn").addEventListener("click", () => loadIdoProducts(true));
 $("idoSearch").addEventListener("keydown", e => { if (e.key === "Enter") loadIdoProducts(true); });
 $("idoMoreBtn").addEventListener("click", () => loadIdoProducts(false));

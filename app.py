@@ -2981,17 +2981,26 @@ def _ido_execute_one(product_id: int) -> dict:
             "icons": sorted(icons_b64), "apply_macro": preview["apply_macro"],
         })
 
-        # 4) PUT slotow 1..N - galeria nigdy nie jest pusta
-        idosell_client.put_product_images(product_id, images_b64)
-        # 5) kasowanie slotow powyzej N
-        idosell_client.delete_product_images(product_id, leftover)
-        # 6) ikony OSOBNYM wywolaniem po galerii (dedupe do referencji
-        #    na plik slotu - w jednym PUT z podmiana galerii ikona znika)
-        if icons_b64:
-            idosell_client.set_product_icons(product_id, icons_b64)
-        # 7) weryfikacja GET-em (galeria + ikony)
-        verify = ido_verify_gallery(product_id, final_count,
-                                    expected_icons=sorted(icons_b64))
+        # 4-7) PUT slotow + kasowanie + ikony + WERYFIKACJA, z PONOWIENIEM gdy
+        # galeria wyszla niekompletna. IdoSell czasem CICHO gubi slot (PUT bez
+        # faultu, ale GET pokazuje brak) - krytyczne przy nocnym batchu, gdzie
+        # nikt nie patrzy. Do 3 prob: PUT calej galerii -> weryfikacja GET-em.
+        verify = None
+        attempt = 0
+        for attempt in range(3):
+            idosell_client.put_product_images(product_id, images_b64)
+            idosell_client.delete_product_images(product_id, leftover)
+            if icons_b64:
+                idosell_client.set_product_icons(product_id, icons_b64)
+            verify = ido_verify_gallery(product_id, final_count,
+                                        expected_icons=sorted(icons_b64))
+            if verify.get("ok"):
+                break
+            if attempt < 2:
+                ido_audit("execute_retry", product_id,
+                          {"attempt": attempt + 1, "verify": verify})
+                time.sleep(2)
+        verify["attempts"] = attempt + 1
     except idosell_client.IdoSellError as e:
         ido_audit("execute_error", product_id, {"error": str(e)})
         raise IdoExecError(str(e), 502)
