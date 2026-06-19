@@ -372,6 +372,7 @@ def process_bytes(data: bytes, opt: dict, with_parts: bool = False):
 
     options = {**DEFAULTS, **opt}
     _src = Image.open(BytesIO(data))
+    _icc = _src.info.get("icc_profile")   # profil kolorow zrodla (np. Adobe RGB)
     if _src.mode in ("RGBA", "LA", "P"):
         # przezroczyste PNG (produkt juz wyciety) -> kompozycja na biel,
         # inaczej convert("RGB") da CZARNE tlo i model/cien zglupieja
@@ -381,6 +382,20 @@ def process_bytes(data: bytes, opt: dict, with_parts: bool = False):
         src = _bg.convert("RGB")
     else:
         src = _src.convert("RGB")
+    # KONWERSJA PRZESTRZENI BARW -> sRGB. Zrodla bywaja w Adobe RGB (1998);
+    # zapisane bez profilu (jak dotad) przegladarka i Allegro czytaja jako sRGB,
+    # co przeklamuje kolory (inny odcien rozu/zieleni). ImageCms remapuje
+    # wartosci do sRGB -> wierny wyglad niezaleznie od profilu wejscia.
+    if _icc:
+        try:
+            from PIL import ImageCms
+            in_prof = ImageCms.ImageCmsProfile(BytesIO(_icc))
+            desc = (ImageCms.getProfileDescription(in_prof) or "").strip().lower()
+            if "srgb" not in desc:
+                src = ImageCms.profileToProfile(
+                    src, in_prof, ImageCms.createProfile("sRGB"), outputMode="RGB")
+        except Exception:
+            pass   # brak littlecms / zly profil -> zostaw oryginalne piksele
     if options.get("mirror"):
         src = ImageOps.mirror(src)  # odbicie - standaryzacja kierunku noska
     if max(src.size) < AI_UPSCALE_BELOW:
