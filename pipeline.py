@@ -32,6 +32,11 @@ DEFAULTS = {
     "whiten_neutral": True,  # jasne neutralne piksele (podeszwa) -> ku bieli
     "edge_feather": 1.0,     # wtopienie krawedzi maski w px
     "mirror": False,         # odbicie lustrzane (standaryzacja kierunku noska)
+    # PRZYTNIJ TYLKO: pomin BiRefNet. Dla zdjec z dobrym bialym tlem, gdzie
+    # wyciecie modelem psuje krawedz. Pseudo-maska z progu (jasne+neutralne =
+    # tlo), tlo->biel (cien ZOSTAJE), kadr do padding + wysrodkowanie. Wybor
+    # reczny w UI per zdjecie/seria - bez auto-detekcji. Patrz white_bg_alpha().
+    "crop_only": False,
     # podbicie kontrastu/jasnosci TYLKO do policzenia maski - model lepiej
     # lapie niskokontrastowe fragmenty (szary element na jasnym tle);
     # finalny obraz skladany z ORYGINALNYCH pikseli, kolory bez zmian.
@@ -120,6 +125,29 @@ def is_full_bleed(rgba: Image.Image) -> bool:
     # (sandal w bok: 89% szer., 26% wys.) -> nie zostanie uznany za pelnokadrowy.
     fills = (x1 - x0) / w >= 0.80 and (y1 - y0) / h >= 0.80
     return spans_x or spans_y or fills
+
+
+def white_bg_alpha(src_rgb: Image.Image, luma_th=205, sat_th=0.12) -> Image.Image:
+    """Pseudo-maska produktu dla trybu PRZYTNIJ TYLKO (bez BiRefNet).
+
+    Tlo studyjne = jasne ORAZ neutralne (biel). Produkt = kolorowy (sat>prog)
+    LUB ciemny (luma<prog). Miekki szary cien jest jasny i neutralny -> traktowany
+    jak tlo (nie powieksza bbox, a w preserve_to_white i tak ZOSTAJE jako szarosc,
+    bo skalujemy cala jasnosc). binary_fill_holes domyka wnetrza (biala podeszwa /
+    wkladka otoczona ciemnym konturem), by nie zrobic dziury w masce. Najmniejsze
+    plamki szumu odsiewa pozniej object_bbox.
+
+    Ograniczenie: produkt CALY bialy na bialym tle (brak ciemnego konturu) jest
+    nieodroznialny od tla - dla takich uzyj zwyklego trybu (BiRefNet)."""
+    import numpy as np
+    from scipy import ndimage
+    arr = np.asarray(src_rgb.convert("RGB")).astype(np.float32)
+    luma = 0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]
+    mx, mn = arr.max(axis=2), arr.min(axis=2)
+    sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1.0), 0.0)
+    mask = (sat > sat_th) | (luma < luma_th)
+    mask = ndimage.binary_fill_holes(mask)
+    return Image.fromarray((mask * 255).astype("uint8"), "L")
 
 
 def whiten_neutral(rgba: Image.Image) -> Image.Image:
@@ -404,6 +432,20 @@ def process_bytes(data: bytes, opt: dict, with_parts: bool = False):
         ratio = MAX_INPUT_PX / max(src.size)
         src = src.resize(
             (int(src.size[0] * ratio), int(src.size[1] * ratio)), Image.LANCZOS)
+
+    # PRZYTNIJ TYLKO: pomijamy BiRefNet. Pseudo-maska z progu (white_bg_alpha),
+    # kompozycja trybem ZACHOWAJ (tlo->biel, cien zostaje, kadr do padding +
+    # wysrodkowanie). Wybor reczny w UI - patrz DEFAULTS["crop_only"].
+    if options.get("crop_only"):
+        alpha = white_bg_alpha(src)
+        rgba = src.convert("RGBA")
+        rgba.putalpha(alpha)
+        opt2 = {**options, "shadow_mode": "preserve", "shadow": True}
+        final = compose(rgba, opt2, src_rgb=src)
+        if with_parts:
+            # edytor maski: oryginal + pseudo-maska (pelnoklatkowe = False)
+            return final, src.convert("RGB"), alpha, False
+        return final
 
     # obraz do SEGMENTACJI: podbity kontrast/jasnosc (lepsza maska na
     # niskokontrastowych fragmentach); finalny obraz - ORYGINALNE piksele

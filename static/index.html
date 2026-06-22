@@ -209,7 +209,8 @@
   }
   .overlay .panel { width: 340px; text-align: center; }
   .overlay .logo { margin: 0 auto 14px; }
-  .overlay input { width: 100%; text-align: center; font-size: 22px; letter-spacing: .4em; margin: 16px 0 4px; }
+  /* styl pola PIN - NIE dotyczy checkboxow/suwakow (rozpychalo .bulk-check w oknach wysylki) */
+  .overlay input:not([type=checkbox]):not([type=range]) { width: 100%; text-align: center; font-size: 22px; letter-spacing: .4em; margin: 16px 0 4px; }
   .overlay .hint { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
   .overlay .error { color: var(--err); font-size: 13px; min-height: 18px; margin-top: 6px; }
   .hidden { display: none !important; }
@@ -462,15 +463,19 @@
         </div>
         <div class="opt-row">
           <label>Cień pod butem<small>dwuwarstwowy, naturalny</small></label>
-          <span class="switch"><input type="checkbox" id="optShadow" checked><span class="slider-bg"></span></span>
+          <label class="switch"><input type="checkbox" id="optShadow" checked><span class="slider-bg"></span></label>
         </div>
         <div class="opt-row">
           <label>Podbicie kolorów<small>delikatna saturacja i kontrast</small></label>
-          <span class="switch"><input type="checkbox" id="optColors" checked><span class="slider-bg"></span></span>
+          <label class="switch"><input type="checkbox" id="optColors" checked><span class="slider-bg"></span></label>
         </div>
         <div class="opt-row">
           <label>Wyostrzanie<small>tylko przy powiększaniu małych zdjęć</small></label>
-          <span class="switch"><input type="checkbox" id="optSharpen" checked><span class="slider-bg"></span></span>
+          <label class="switch"><input type="checkbox" id="optSharpen" checked><span class="slider-bg"></span></label>
+        </div>
+        <div class="opt-row">
+          <label>Przytnij tylko<small>bez wycinania tła - tło→biel, cień zostaje (dla dobrych białych zdjęć)</small></label>
+          <label class="switch"><input type="checkbox" id="optCropOnly"><span class="slider-bg"></span></label>
         </div>
 
         <details>
@@ -750,6 +755,7 @@ function optionsForm(fd) {
   fd.append("contrast", $("optCon").value);
   fd.append("padding", $("optPad").value);
   fd.append("max_upscale", $("optUp").value);
+  fd.append("crop_only", $("optCropOnly").checked);
   return fd;
 }
 
@@ -1022,6 +1028,11 @@ function readyIdoGroups() {
   }
   return out;
 }
+// zaznacz/odznacz wszystkie pozycje w oknie wysylki wsadowej - by szybko dolaczyc
+// z powrotem produkty z uwagami QA (domyslnie odznaczone), gdy juz je przejrzano
+function bulkToggleAll(checked) {
+  document.querySelectorAll("#bulkBody .bulk-check").forEach(c => { c.checked = checked; });
+}
 $("bulkPushBtn").addEventListener("click", () => {
   const groups = readyIdoGroups();
   if (!groups.length) { alert("Brak w pełni obrobionych produktów IdoSell do wysłania."); return; }
@@ -1031,6 +1042,10 @@ $("bulkPushBtn").addEventListener("click", () => {
       ⚠️ <b>Za chwilę nadpiszesz galerie w sklepie IdoSell dla zaznaczonych produktów.</b>
       Każdy przechodzi pełny wzorzec: archiwum oryginałów (D:) → backup → PUT → weryfikacja GET → audyt.
       Produkty z uwagami QA są domyślnie odznaczone - przejrzyj je w edytorze przed wysłaniem.
+    </div>
+    <div style="display:flex;gap:16px;align-items:center;margin-top:10px;font-size:12.5px">
+      <a href="#" onclick="bulkToggleAll(true);return false" style="color:var(--accent2);text-decoration:none">☑ Zaznacz wszystkie</a>
+      <a href="#" onclick="bulkToggleAll(false);return false" style="color:var(--muted);text-decoration:none">☐ Odznacz wszystkie</a>
     </div>
     <div style="max-height:300px;overflow:auto;background:var(--panel2);border-radius:10px;padding:8px 12px;margin:12px 0">
       ${groups.map(g => `
@@ -1262,6 +1277,9 @@ function render() {
     const seen = new Map();
     for (const [pid, gj] of groupEntries) {
       const sm = studioMeta(pid, gj);
+      // przy "Ukryj wysłane" pomijamy wyslane warianty - model zostaje na liscie
+      // tylko gdy ma jeszcze jakis niewyslany wariant (spojnie z filtrem kart nizej)
+      if (hideSent && sm.executed) continue;
       if (sm.series_id != null) seen.set(String(sm.series_id), sm.series_name || ("seria " + sm.series_id));
     }
     const opts = `<option value="">Model: wszystkie</option>` +
@@ -2112,6 +2130,11 @@ function sendSelected(ids) {
       ⚠️ <b>Za chwilę nadpiszesz galerie w sklepie IdoSell dla zaznaczonych produktów.</b>
       Każdy przechodzi pełny wzorzec: archiwum oryginałów (D:) → backup → PUT → weryfikacja GET → audyt.
       Produkt bez gotowego planu zgłosi błąd (nic mu nie zrobi).
+      Produkty z uwagami QA są domyślnie odznaczone.
+    </div>
+    <div style="display:flex;gap:16px;align-items:center;margin-top:10px;font-size:12.5px">
+      <a href="#" onclick="bulkToggleAll(true);return false" style="color:var(--accent2);text-decoration:none">☑ Zaznacz wszystkie</a>
+      <a href="#" onclick="bulkToggleAll(false);return false" style="color:var(--muted);text-decoration:none">☐ Odznacz wszystkie</a>
     </div>
     <div style="max-height:300px;overflow:auto;background:var(--panel2);border-radius:10px;padding:8px 12px;margin:12px 0">
       ${ids.map(id => {
