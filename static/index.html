@@ -1109,7 +1109,7 @@ $("bulkGo").addEventListener("click", async () => {
   if (undoBtn) undoBtn.addEventListener("click", () => bulkRollback(sentIds));
   loadIdoProducts(true);
   lastJobsKey = ""; refresh();
-  offerAllegroPush(sentIds.map(id => ({ id, code: allegroCode(id) })));
+  offerAllegroPush(sentIds);
 });
 
 // ---------- most Allegro (push po udanej wyslce na IdoSell; kontrakt v0.2) -------
@@ -1120,18 +1120,15 @@ let allegroBridgeConfigured = false;
 (async () => {
   try { const r = await api("/api/allegro/bridge/status"); allegroBridgeConfigured = (await r.json()).configured; } catch {}
 })();
-function allegroCode(pid) { const m = idoMeta[String(pid)]; return m && m.code ? String(m.code) : null; }
-
-async function offerAllegroPush(products) {
+async function offerAllegroPush(ids) {
   if (!allegroBridgeConfigured) return;
-  const withCode = (products || []).filter(p => p.code);
-  if (!withCode.length) return;
-  const codeToId = {}; withCode.forEach(p => { codeToId[p.code] = String(p.id); });
+  const pids = (ids || []).map(String).filter(Boolean);
+  if (!pids.length) return;
   let data;
   try {
     const r = await api("/api/allegro/bridge/preview", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codes: withCode.map(p => p.code) }),
+      body: JSON.stringify({ product_ids: pids }),   // kod ustala backend z product_id
     });
     data = await r.json();
   } catch { return; }
@@ -1142,7 +1139,7 @@ async function offerAllegroPush(products) {
     const offs = o.offers || [];
     const act = offs.filter(x => x.status === "ACTIVE").length;
     return `<label style="display:flex;gap:10px;align-items:center;padding:5px 0;font-size:13px">
-      <input type="checkbox" class="alg-check" value="${esc(o.code)}" checked style="accent-color:var(--accent)">
+      <input type="checkbox" class="alg-check" value="${esc(o.product_id)}" checked style="accent-color:var(--accent)">
       <span style="min-width:120px;color:var(--accent2)">${esc(o.code)}</span>
       <span class="badge">model ${esc(o.model || "?")}</span>
       <span class="badge">${offs.length} wariantów (${act} aktywnych)</span>
@@ -1166,25 +1163,26 @@ async function offerAllegroPush(products) {
   $("allegroOverlay").classList.remove("hidden");
   $("allegroConfirm").onchange = e => $("allegroGo").disabled = !e.target.checked;
   $("allegroGo").onclick = async () => {
-    const codes = [...document.querySelectorAll(".alg-check:checked")].map(c => c.value);
-    if (!codes.length) { alert("Zaznacz przynajmniej jedną ofertę"); return; }
-    $("allegroGo").disabled = true; $("allegroGo").textContent = `Wysyłanie ${codes.length}...`;
+    const sel = [...document.querySelectorAll(".alg-check:checked")].map(c => c.value);
+    if (!sel.length) { alert("Zaznacz przynajmniej jedną ofertę"); return; }
+    $("allegroGo").disabled = true; $("allegroGo").textContent = `Wysyłanie ${sel.length}...`;
     const out = [];
-    for (const code of codes) {
-      const pid = codeToId[code];
+    for (const pid of sel) {
+      const o = onAllegro.find(x => String(x.product_id) === pid) || {};
+      const label = o.code || pid;
       try {
         const r = await api("/api/allegro/bridge/execute", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ product_id: pid, code, confirm: true }),
+          body: JSON.stringify({ product_id: pid, confirm: true }),
         });
         const d = await r.json();
-        if (d.error) out.push(`<div style="color:var(--err)">${esc(code)}: ✗ ${esc(d.error)}</div>`);
+        if (d.error) out.push(`<div style="color:var(--err)">${esc(label)}: ✗ ${esc(d.error)}</div>`);
         else {
           const res = d.results || [];
           const ok = res.filter(x => x.ok).length;
-          out.push(`<div style="color:${ok === res.length ? "var(--ok)" : "#ff8a3d"}">${esc(code)}: ${ok}/${res.length} ofert OK</div>`);
+          out.push(`<div style="color:${ok === res.length ? "var(--ok)" : "#ff8a3d"}">${esc(label)}: ${ok}/${res.length} ofert OK</div>`);
         }
-      } catch { out.push(`<div style="color:var(--err)">${esc(code)}: ✗ błąd połączenia</div>`); }
+      } catch { out.push(`<div style="color:var(--err)">${esc(label)}: ✗ błąd połączenia</div>`); }
     }
     $("allegroBody").innerHTML = `<p style="color:var(--ok);font-size:15px">Push na Allegro zakończony.</p>
       <div style="max-height:320px;overflow:auto;margin-top:10px">${out.join("")}</div>
@@ -1959,7 +1957,7 @@ async function executeIdoPlan() {
     <p style="font-size:12.5px;color:var(--muted);margin-top:4px">Backup stanu sprzed zapisu: originals/idosell/${esc(planOfferId)}/ · dziennik: idosell_audit.jsonl</p>
     <button class="btn btn-ghost" style="margin-top:14px" onclick="rollbackIdoPlan()">↩ Przywróć poprzednią galerię (rollback)</button>`;
   loadIdoProducts(true);
-  offerAllegroPush([{ id: planOfferId, code: allegroCode(planOfferId) }]);
+  offerAllegroPush([planOfferId]);
 }
 
 // zmiana akcji pojedynczego zdjecia w planie IdoSell (np. zle sklasyfikowane

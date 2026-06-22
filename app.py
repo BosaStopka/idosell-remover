@@ -3125,15 +3125,23 @@ def allegro_bridge_status():
 
 @app.post("/api/allegro/bridge/preview")
 def allegro_bridge_preview():
-    """A1 (read-only): przekaz kody do bg-removera, zwroc on_allegro/skip."""
+    """A1 (read-only): z product_ids ustal kody SERWEROWO (idosell_client), przekaz
+    do bg-removera, zwroc on_allegro (z dolaczonym product_id) + skip + no_code.
+    Kod rozwiazujemy z product_id, zeby nie zalezec od pamieci przegladarki."""
     body = request.get_json(silent=True) or {}
-    codes = [str(c).strip() for c in (body.get("codes") or []) if str(c).strip()]
-    if not codes:
-        return jsonify({"error": "Brak kodow"}), 400
+    pids = [str(p).strip() for p in (body.get("product_ids") or []) if str(p).strip()]
+    if not pids:
+        return jsonify({"error": "Brak product_ids"}), 400
+    # bg matchuje po 'code' = IdoSell productId (= baza Allegro external.id;
+    # potwierdzone empirycznie 7206/7207). productDisplayedCode to INNY identyfikator
+    # (np. 7206 -> "01394-70109") i bg go NIE rozpoznaje - dlatego slemy productId.
     try:
-        return jsonify(allegro_bridge.preview(codes))
+        r = allegro_bridge.preview(pids)
     except allegro_bridge.BridgeError as e:
         return jsonify({"error": str(e)}), 502
+    for o in (r.get("on_allegro") or []):
+        o["product_id"] = o.get("code")   # code == productId
+    return jsonify(r)
 
 
 @app.post("/api/allegro/bridge/execute")
@@ -3143,13 +3151,12 @@ def allegro_bridge_execute():
     body = request.get_json(silent=True) or {}
     if body.get("confirm") is not True:
         return jsonify({"error": "Brak potwierdzenia"}), 400
-    code = (body.get("code") or "").strip()
     try:
         product_id = int(body.get("product_id"))
     except (TypeError, ValueError):
         return jsonify({"error": "Brak/zly product_id"}), 400
-    if not code:
-        return jsonify({"error": "Brak code"}), 400
+    # bg matchuje po productId (= baza Allegro external.id), nie po productDisplayedCode
+    code = str(product_id)
     try:
         paths = _ido_final_image_paths(product_id)
     except ValueError as e:
