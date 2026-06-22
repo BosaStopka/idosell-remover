@@ -587,6 +587,7 @@
         <button class="btn btn-primary hidden" id="idoBatchBtn" title="Otwiera wybór zdjęć PO KOLEI dla każdego - decydujesz co obrobić/zostawić/usunąć">🪄 Obrób zaznaczone</button>
         <button class="btn btn-ghost hidden" id="idoBatchAllBtn" title="Obrób WSZYSTKIE zdjęcia zaznaczonych bez okna wyboru (szybko, do dużych paczek)">⚡ bez wyboru</button>
         <button class="btn btn-ghost hidden" id="idoSendBtn" title="Wyślij do IdoSell tylko zaznaczone obrobione produkty (z potwierdzeniem; nieobrobione zgłoszą błąd)">📤 Wyślij zaznaczone</button>
+        <button class="btn btn-ghost hidden" id="idoClearSelBtn" title="Odznacz wszystkie zaznaczone produkty (czyści zaznaczenie, niczego nie wysyła ani nie cofa)">✕ Wyczyść zaznaczenie</button>
         <button class="btn btn-ghost hidden" id="idoRollbackBtn" style="color:var(--err);border-color:var(--err)" title="Przywróć zaznaczone produkty z backupu na dysku (cofa wysyłkę - działa kiedykolwiek)">↩ Cofnij zaznaczone</button>
         <button class="btn btn-ghost" id="idoRollbackIdsBtn" style="color:var(--err);border-color:var(--err)" title="Hurtowy rollback: wpisz/wklej listę ID (po przecinku/spacji/enterze) - przywróci je z backupu, bez zaznaczania">⌨ Cofnij z listy ID</button>
         <label style="font-size:13px;color:var(--muted);display:flex;align-items:center;gap:5px" title="Ukryj produkty, które mają już lokalne wyniki (obrobione/wysłane)">
@@ -2222,7 +2223,16 @@ function toggleIdo(id, on) {
   const rb = $("idoRollbackBtn");
   rb.classList.toggle("hidden", !selectedIdo.size);
   rb.textContent = `↩ Cofnij zaznaczone (${selectedIdo.size})`;
+  const cb = $("idoClearSelBtn");
+  cb.classList.toggle("hidden", !selectedIdo.size);
+  cb.textContent = `✕ Wyczyść zaznaczenie (${selectedIdo.size})`;
 }
+// wyczysc zaznaczenie: odznacz widoczne checkboxy + wyzeruj set + odswiez przyciski
+$("idoClearSelBtn").addEventListener("click", () => {
+  document.querySelectorAll("#idoProducts .offer-check").forEach(c => { c.checked = false; });
+  selectedIdo.clear();
+  toggleIdo("", false);
+});
 $("idoRollbackBtn").addEventListener("click", () => bulkRollback([...selectedIdo]));
 $("idoRollbackIdsBtn").addEventListener("click", rollbackByIds);
 $("idoSendBtn").addEventListener("click", () => sendSelected([...selectedIdo]));
