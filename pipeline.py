@@ -341,6 +341,22 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
         pool *= colw[None, :]
         # finalne zmiekczenie - mocniej w poziomie niz w pionie (gladkie boki)
         pool = ndimage.gaussian_filter(pool, sigma=(blur * 0.8, blur * 2.0))
+        # ZAWIERANIE cienia w kadrze: produkt zostaje na swojej skali (np. 90%),
+        # ale cien nie moze byc UCIETY twarda krawedzia ramki przy szerokich butach.
+        # Wygaszamy go cosinusowo w marginesie MIEDZY krawedzia produktu a brzegiem
+        # kadru -> dochodzi do zera dokladnie przy brzegu. Pelny cien pod produktem
+        # (tez pod koncowkami) zostaje nietkniety - gasi sie tylko nadmiar, ktory
+        # i tak wychodzil poza kadr. Dla waskich butow (cien miescil sie) bez zmian.
+        if col_has.any():
+            pl = int(np.argmax(col_has))
+            pr = size[0] - 1 - int(np.argmax(col_has[::-1]))
+            win = np.ones(size[0], np.float32)
+            if pl > 0:
+                win[:pl] = 0.5 - 0.5 * np.cos(np.pi * np.arange(pl) / pl)
+            if pr < size[0] - 1:
+                n = size[0] - 1 - pr
+                win[pr + 1:] = 0.5 + 0.5 * np.cos(np.pi * np.arange(1, n + 1) / n)
+            pool *= win[None, :]
         # NIE odejmujemy maski produktu: cien ma dochodzic AZ do podeszwy (bez
         # bialego paska miedzy butem a cieniem). Produkt nakladamy na wierzch,
         # wiec cien pod nim i tak jest zakryty, a kaluza istnieje tylko przy
