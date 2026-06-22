@@ -351,6 +351,18 @@
   </div>
 </div>
 
+<div class="overlay hidden" id="allegroOverlay">
+  <div class="panel modal-box" style="max-width:720px">
+    <h2>Wyślij na Allegro</h2>
+    <div id="allegroBody"></div>
+    <div class="modal-foot">
+      <span class="summary" id="allegroSummary"></span>
+      <button class="btn btn-ghost" id="allegroCancel">Zamknij</button>
+      <button class="btn btn-primary hidden" id="allegroGo" style="background:linear-gradient(135deg,#e17055,#d63031)">📤 Wyślij na Allegro</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay hidden" id="editorOverlay">
   <div class="panel modal-box" style="max-width:1100px">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
@@ -1097,7 +1109,90 @@ $("bulkGo").addEventListener("click", async () => {
   if (undoBtn) undoBtn.addEventListener("click", () => bulkRollback(sentIds));
   loadIdoProducts(true);
   lastJobsKey = ""; refresh();
+  offerAllegroPush(sentIds.map(id => ({ id, code: allegroCode(id) })));
 });
+
+// ---------- most Allegro (push po udanej wyslce na IdoSell; kontrakt v0.2) -------
+// idosell tylko WOLA bg-removera. Po wyslce na sklep: jesli most skonfigurowany,
+// sprawdzamy ktore z wyslanych sa na Allegro i (po potwierdzeniu) pchamy te same
+// zdjecia tam. Wpiete w single (executeIdoPlan) i bulk (bulk-execute).
+let allegroBridgeConfigured = false;
+(async () => {
+  try { const r = await api("/api/allegro/bridge/status"); allegroBridgeConfigured = (await r.json()).configured; } catch {}
+})();
+function allegroCode(pid) { const m = idoMeta[String(pid)]; return m && m.code ? String(m.code) : null; }
+
+async function offerAllegroPush(products) {
+  if (!allegroBridgeConfigured) return;
+  const withCode = (products || []).filter(p => p.code);
+  if (!withCode.length) return;
+  const codeToId = {}; withCode.forEach(p => { codeToId[p.code] = String(p.id); });
+  let data;
+  try {
+    const r = await api("/api/allegro/bridge/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codes: withCode.map(p => p.code) }),
+    });
+    data = await r.json();
+  } catch { return; }
+  if (data.error) { console.warn("Allegro preview:", data.error); return; }
+  const onAllegro = data.on_allegro || [];
+  if (!onAllegro.length) return;   // nic z wyslanych nie jest na Allegro -> cisza
+  const rows = onAllegro.map(o => {
+    const offs = o.offers || [];
+    const act = offs.filter(x => x.status === "ACTIVE").length;
+    return `<label style="display:flex;gap:10px;align-items:center;padding:5px 0;font-size:13px">
+      <input type="checkbox" class="alg-check" value="${esc(o.code)}" checked style="accent-color:var(--accent)">
+      <span style="min-width:120px;color:var(--accent2)">${esc(o.code)}</span>
+      <span class="badge">model ${esc(o.model || "?")}</span>
+      <span class="badge">${offs.length} wariantów (${act} aktywnych)</span>
+    </label>`;
+  }).join("");
+  $("allegroBody").innerHTML = `
+    <div class="allegro-note" style="border-color:var(--err)">
+      ⚠️ <b>Wypchnięcie zdjęć na Allegro</b> dla ofert poniżej - push na WSZYSTKIE warianty
+      (aktywne + zakończone). Galeria = ta sama co wysłana na sklep (pełna, cap 16).
+      Każda oferta: backup + PATCH + rollback po stronie bg-removera.
+    </div>
+    <div style="max-height:300px;overflow:auto;background:var(--panel2);border-radius:10px;padding:8px 12px;margin:12px 0">${rows}</div>
+    ${(data.skip && data.skip.length) ? `<p style="font-size:12px;color:var(--muted)">Poza Allegro (pominięte): ${data.skip.map(esc).join(", ")}</p>` : ""}
+    <label style="display:flex;gap:10px;align-items:center;margin:8px 0;font-size:13.5px">
+      <input type="checkbox" id="allegroConfirm" style="width:18px;height:18px;accent-color:var(--err)">
+      Rozumiem, że to nadpisze galerie ofert na Allegro (backup i rollback w bg-removerze)
+    </label>`;
+  $("allegroSummary").textContent = `${onAllegro.length} ofert na Allegro`;
+  $("allegroGo").classList.remove("hidden");
+  $("allegroGo").disabled = true; $("allegroGo").textContent = "📤 Wyślij na Allegro";
+  $("allegroOverlay").classList.remove("hidden");
+  $("allegroConfirm").onchange = e => $("allegroGo").disabled = !e.target.checked;
+  $("allegroGo").onclick = async () => {
+    const codes = [...document.querySelectorAll(".alg-check:checked")].map(c => c.value);
+    if (!codes.length) { alert("Zaznacz przynajmniej jedną ofertę"); return; }
+    $("allegroGo").disabled = true; $("allegroGo").textContent = `Wysyłanie ${codes.length}...`;
+    const out = [];
+    for (const code of codes) {
+      const pid = codeToId[code];
+      try {
+        const r = await api("/api/allegro/bridge/execute", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ product_id: pid, code, confirm: true }),
+        });
+        const d = await r.json();
+        if (d.error) out.push(`<div style="color:var(--err)">${esc(code)}: ✗ ${esc(d.error)}</div>`);
+        else {
+          const res = d.results || [];
+          const ok = res.filter(x => x.ok).length;
+          out.push(`<div style="color:${ok === res.length ? "var(--ok)" : "#ff8a3d"}">${esc(code)}: ${ok}/${res.length} ofert OK</div>`);
+        }
+      } catch { out.push(`<div style="color:var(--err)">${esc(code)}: ✗ błąd połączenia</div>`); }
+    }
+    $("allegroBody").innerHTML = `<p style="color:var(--ok);font-size:15px">Push na Allegro zakończony.</p>
+      <div style="max-height:320px;overflow:auto;margin-top:10px">${out.join("")}</div>
+      <p style="font-size:12.5px;color:var(--muted);margin-top:8px">Rollback per oferta po stronie bg-removera (audyt + backup).</p>`;
+    $("allegroGo").classList.add("hidden"); $("allegroSummary").textContent = "";
+  };
+}
+$("allegroCancel").addEventListener("click", () => $("allegroOverlay").classList.add("hidden"));
 
 // wsadowe cofniecie zapisu (przywrocenie z backupu na dysku) - dziala KIEDYKOLWIEK,
 // tez dla produktow wyslanych w poprzedniej sesji (backup trwa na dysku per produkt).
@@ -1864,6 +1959,7 @@ async function executeIdoPlan() {
     <p style="font-size:12.5px;color:var(--muted);margin-top:4px">Backup stanu sprzed zapisu: originals/idosell/${esc(planOfferId)}/ · dziennik: idosell_audit.jsonl</p>
     <button class="btn btn-ghost" style="margin-top:14px" onclick="rollbackIdoPlan()">↩ Przywróć poprzednią galerię (rollback)</button>`;
   loadIdoProducts(true);
+  offerAllegroPush([{ id: planOfferId, code: allegroCode(planOfferId) }]);
 }
 
 // zmiana akcji pojedynczego zdjecia w planie IdoSell (np. zle sklasyfikowane

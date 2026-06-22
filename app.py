@@ -27,6 +27,7 @@ from queue import Queue
 from flask import (Flask, jsonify, make_response, request, send_file,
                    send_from_directory)
 
+import allegro_bridge
 import allegro_client
 import idosell_client
 import pipeline
@@ -3088,6 +3089,82 @@ def idosell_bulk_execute():
             results.append({"id": pid, "ok": False, "error": str(e)})
     ok = sum(1 for r in results if r["ok"])
     return jsonify({"results": results, "ok": ok, "failed": len(results) - ok})
+
+
+# ---------------- most Allegro (idosell -> bg-remover, kontrakt v0.2) ----------
+# idosell NIE dotyka Allegro - tylko wola bg-removera (allegro_bridge.py). Push
+# proponowany PO udanej wysylce na IdoSell (auto-prompt we froncie, decyzja usera).
+def _ido_final_image_paths(product_id: int) -> list:
+    """ABSOLUTNE sciezki finalnej galerii wyslanej na sklep, w kolejnosci planu
+    (process -> done/, keep -> backup oryginalu). To samo zrodlo co _ido_execute_one,
+    wiec galeria 1:1 ze sklepem. Wymaga wykonanego planu (keep bierze z backupu)."""
+    preview = build_ido_plan_preview(product_id)        # ValueError -> brak planu
+    plan = load_ido_plan(product_id) or {}
+    backup = {b["id"]: b for b in (plan.get("backup_images") or [])}
+    paths = []
+    for item in preview["items"]:
+        if item["action"] == "delete":
+            continue
+        if item["action"] == "process":
+            p = (DONE_DIR / item["local"]).resolve()
+        else:  # keep - plik z backupu oryginalow (jak w _ido_execute_one)
+            entry = backup.get(item.get("image_id"))
+            if not entry:
+                continue
+            p = (ORIGINALS_DIR / entry["file"]).resolve()
+        if p.exists():
+            paths.append(str(p))
+    return paths
+
+
+@app.get("/api/allegro/bridge/status")
+def allegro_bridge_status():
+    """Czy most do bg-removera jest skonfigurowany (allegro_bridge_config.json)."""
+    return jsonify({"configured": allegro_bridge.load_config() is not None})
+
+
+@app.post("/api/allegro/bridge/preview")
+def allegro_bridge_preview():
+    """A1 (read-only): przekaz kody do bg-removera, zwroc on_allegro/skip."""
+    body = request.get_json(silent=True) or {}
+    codes = [str(c).strip() for c in (body.get("codes") or []) if str(c).strip()]
+    if not codes:
+        return jsonify({"error": "Brak kodow"}), 400
+    try:
+        return jsonify(allegro_bridge.preview(codes))
+    except allegro_bridge.BridgeError as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.post("/api/allegro/bridge/execute")
+def allegro_bridge_execute():
+    """A2 (zapis, wymaga confirm): zbuduj image_paths finalnej galerii produktu
+    i przekaz bg-removerowi (po code). Push na WSZYSTKIE warianty (all_variants)."""
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"error": "Brak potwierdzenia"}), 400
+    code = (body.get("code") or "").strip()
+    try:
+        product_id = int(body.get("product_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Brak/zly product_id"}), 400
+    if not code:
+        return jsonify({"error": "Brak code"}), 400
+    try:
+        paths = _ido_final_image_paths(product_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    if not paths:
+        return jsonify({"error": "Brak finalnej galerii - czy produkt wyslany na IdoSell?"}), 409
+    try:
+        res = allegro_bridge.execute(code, paths)
+    except allegro_bridge.BridgeError as e:
+        ido_audit("allegro_push_error", product_id, {"code": code, "error": str(e)})
+        return jsonify({"error": str(e)}), 502
+    ido_audit("allegro_push", product_id, {
+        "code": code, "images": len(paths),
+        "results": (res or {}).get("results")})
+    return jsonify(res)
 
 
 def _ido_rollback_one(product_id: int) -> dict:
