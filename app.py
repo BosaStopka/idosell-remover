@@ -2957,6 +2957,13 @@ class IdoExecError(Exception):
         self.status = status
 
 
+def _id_stem(image_id) -> str:
+    """Rdzen image_id bez rozszerzenia. IdoSell raportuje TEN SAM slot raz jako
+    '8524_4.webp', raz '8524_4.jpg' (plan ze skanu vs live GET) - porownujemy po
+    slocie, nie po rozszerzeniu, inaczej 'keep' falszywie wykrywa zniknicie."""
+    return str(image_id or "").rsplit(".", 1)[0]
+
+
 def _log_lowres_sent(product_id: int, preview: dict, sent_at: str) -> int:
     """Loguje zdjecia z MALYM zrodlem (dluzszy bok < LOWRES_MAX_PX), ktore
     POSZLY do sklepu - zbiera sie lista 'do poprawy' (znalezc lepsze zrodlo,
@@ -3022,10 +3029,11 @@ def _ido_execute_one(product_id: int) -> dict:
         # "Usun" i tak znika - wiec puste/zmienione zdjecia zrodlowe ich
         # nie blokuja (pozwala dosłac do recznie wyczyszczonej galerii).
         current = idosell_client.get_product_images(product_id)
-        current_ids = {i["id"] for i in current}
+        current_stems = {_id_stem(i["id"]) for i in current}
         keep_ids = {d.get("image_id") for d in plan["decisions"]
                     if d["action"] == "keep" and d.get("image_id")}
-        missing = keep_ids - current_ids
+        # porownanie po slocie (bez rozszerzenia) - .webp w planie vs .jpg w sklepie
+        missing = {kid for kid in keep_ids if _id_stem(kid) not in current_stems}
         if missing:
             raise IdoExecError(
                 f"Zdjecia oznaczone 'Zostaw' zniknely ze sklepu "
@@ -3046,9 +3054,9 @@ def _ido_execute_one(product_id: int) -> dict:
             if item["action"] == "process":
                 data = (DONE_DIR / item["local"]).read_bytes()
                 uploaded += 1
-            else:  # keep - bajty ze swiezego backupu
+            else:  # keep - bajty ze swiezego backupu (match po slocie, bez rozszerzenia)
                 entry = next((b for b in backup
-                              if b["id"] == item["image_id"]), None)
+                              if _id_stem(b["id"]) == _id_stem(item["image_id"])), None)
                 if entry is None:
                     raise IdoExecError(
                         f"Zdjecie {item['image_id']} (Zostaw) zniknelo "
