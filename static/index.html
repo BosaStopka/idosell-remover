@@ -854,6 +854,34 @@ async function retryJob(id, el) {
   } catch { el.textContent = "↻ Ponów"; }
 }
 
+// "Bez ramki" - ponowna obrobka z full_bleed=true (wytnij tlo, zostaw pelny kadr)
+async function retryFullBleed(id, el) {
+  if (el) el.textContent = "...";
+  const fd = optionsForm(new FormData());
+  fd.set("full_bleed", "true");
+  fd.set("crop_only", "false");   // bez ramki = wycinamy tlo (nie tryb "przytnij tylko")
+  try {
+    const res = await api(`/api/jobs/${id}/retry`, { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.error) { alert(data.error); if (el) el.textContent = "🖼 Bez ramki"; return; }
+    startPolling();
+  } catch { if (el) el.textContent = "🖼 Bez ramki"; }
+}
+
+// "Przywroc oryginal" - fashion/lifestyle blednie obrobione -> oryginal 1:1 (zostaw)
+async function keepOriginal(id, el) {
+  if (!confirm("Przywrócić oryginał 1:1 (cofnąć wycięcie tła)?\nZdjęcie zostanie oznaczone jako fashion/lifestyle i pójdzie do galerii bez obróbki.")) return;
+  if (el) el.textContent = "...";
+  try {
+    const res = await api(`/api/jobs/${id}/keep-original`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); if (el) el.textContent = "↩ Oryginał"; return; }
+    lastJobsKey = ""; refresh();
+  } catch { alert("Błąd połączenia"); if (el) el.textContent = "↩ Oryginał"; }
+}
+
 // odbicie lustrzane gotowego zdjecia (instant, bez re-inference) - rev busta cache
 async function flipPhoto(jobId) {
   try {
@@ -1488,6 +1516,8 @@ function render() {
               <a href="#" onclick="replaceFile('${j.id}'); return false" title="Podmień to zdjęcie fashion na lepszą wersję z dysku. ZOSTAJE 1:1, bez wycinania tła.">📁 Dysk</a>` : ""}`
               : `${canRetry ? `<a href="#" onclick="retryJob('${j.id}', this); return false" title="Obrob ponownie z aktualnymi ustawieniami">↻ Ponów</a>` : ""}
                  ${j.status === "done" ? `<a href="#" onclick="flipPhoto('${j.id}'); return false" title="Odbij lustrzanie gotowego zdjęcia (kierunek noska) - bez ponownej obróbki">⇄ Odbij</a>` : ""}
+                 ${j.status === "done" ? `<a href="#" onclick="retryFullBleed('${j.id}', this); return false" title="Wytnij tło, ale zostaw produkt na PEŁNYM kadrze (bez białej ramki) - dla ujęć wypełniających kadr (para z góry, detal)">🖼 Bez ramki</a>` : ""}
+                 ${j.status === "done" ? `<a href="#" onclick="keepOriginal('${j.id}', this); return false" title="To jest fashion/lifestyle - przywróć ORYGINAŁ 1:1 (cofnij wycięcie tła)">↩ Oryginał</a>` : ""}
                  ${(j.status === "done" || j.status === "error") && j.orig ? `<a href="#" onclick="replaceUrl('${j.id}'); return false" title="Podmień źródło na lepsze zdjęcie z linku (np. wyższa rozdzielczość) i przerób ponownie">🔗 Zamień (link)</a>
                  <a href="#" onclick="replaceFile('${j.id}'); return false" title="Podmień źródło na plik z dysku i przerób ponownie">📁 Dysk</a>` : ""}`}
             ${j.source === "idosell" && j.pid && j.photo_index != null ? `<a href="#" onclick="studioDelete('${esc(j.pid)}', ${j.photo_index}); return false" style="color:var(--err)" title="Usuń to zdjęcie z produktu - nie pójdzie do galerii (jeśli było w sklepie, zniknie przy najbliższej wysyłce)">🗑 Usuń</a>` : ""}

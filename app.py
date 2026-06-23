@@ -611,6 +611,68 @@ def api_flip(job_id):
     return jsonify({"ok": True, "mirror": mirror, "rev": job["rev"]})
 
 
+@app.post("/api/jobs/<job_id>/keep-original")
+def api_keep_original(job_id):
+    """Przywroc ORYGINAL zdjecia (zostaw 1:1, bez obrobki) - dla fashion/lifestyle
+    blednie obrobionego. Wynik = oryginal 1:1, job oznaczony kept+fashion, maska
+    skasowana (recompose-all go pomija), plan: action=process + fashion=True (wysylka
+    wrzuci LOKALNY plik 1:1, nie stare bajty ze sklepu)."""
+    from io import BytesIO
+
+    from PIL import Image
+    with lock:
+        job = jobs.get(job_id)
+        if not job or not job.get("orig") or \
+                not (ORIGINALS_DIR / job["orig"]).exists():
+            return jsonify({"error": "Brak oryginalu zadania"}), 404
+        if job.get("status") in ("queued", "processing"):
+            return jsonify({"error": "Zadanie jest w kolejce"}), 409
+        orig = job["orig"]
+        result = job.get("result")
+        jname = job.get("name") or ""
+    try:
+        content = (ORIGINALS_DIR / orig).read_bytes()
+        with Image.open(BytesIO(content)) as im:
+            w, h = im.size
+    except Exception as e:
+        return jsonify({"error": f"Blad oryginalu: {e}"}), 500
+    if not result:                              # brak wyniku -> zloz z nazwy
+        stem0 = Path(jname).stem
+        result = f"{extract_product_id(stem0)}/{stem0}.jpg"
+    try:
+        (DONE_DIR / result).parent.mkdir(parents=True, exist_ok=True)
+        Image.open(BytesIO(content)).convert("RGB").save(
+            DONE_DIR / result, "JPEG", quality=95)
+    except Exception as e:
+        return jsonify({"error": f"Zapis wyniku: {e}"}), 500
+    stem = Path(jname).stem                     # plan: action=process + fashion
+    m = re.search(r"_(\d+)$", stem)
+    if m:
+        pid, idx = extract_product_id(stem), int(m.group(1))
+        pf = DONE_DIR / pid / "plan.json"
+        if pf.exists():
+            try:
+                plan = json.loads(pf.read_text(encoding="utf-8"))
+                for d in plan.get("decisions", []):
+                    if d.get("index") == idx:
+                        d["action"] = "process"
+                        d["fashion"] = True
+                pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
+                              encoding="utf-8")
+            except (json.JSONDecodeError, OSError):
+                pass
+    # skasuj maske -> recompose-all pomija (zostaje 1:1, nie re-tnie tla)
+    (MASKS_DIR / f"{job_id}.a.png").unlink(missing_ok=True)
+    (MASKS_DIR / f"{job_id}.rgb.jpg").unlink(missing_ok=True)
+    with lock:
+        job.update(result=result, kept=True, fashion=True, editable=False,
+                   error=None)
+        job["qa"] = {"ok": True, "issues": []}
+        job["rev"] = (job.get("rev") or 0) + 1
+    persist_jobs()
+    return jsonify({"ok": True, "rev": job["rev"]})
+
+
 def _replace_job_image(job_id, content):
     """Podmiana obrazu zadania danymi bajtami (z URL albo z dysku).
     - zadanie KEPT (fashion): zapis 1:1 bez modelu + plan -> action=process
@@ -2785,7 +2847,8 @@ def build_ido_plan_preview(product_id: int) -> dict:
     for d in plan["decisions"]:
         item = {"index": d["index"], "action": d["action"], "url": d["url"],
                 "image_id": d.get("image_id"), "slot": d.get("slot"),
-                "icons": d.get("icons") or [], "extra": d.get("extra")}
+                "icons": d.get("icons") or [], "extra": d.get("extra"),
+                "fashion": bool(d.get("fashion"))}
         if d["action"] == "process":
             rel = f"{product_id}/{product_id}_{d['index']}.jpg"
             path = DONE_DIR / rel
@@ -2795,6 +2858,17 @@ def build_ido_plan_preview(product_id: int) -> dict:
             else:
                 ready = False
         items.append(item)
+    # DOMYSLNA kolejnosc galerii: [1: glowny profil produktu] [2: fashion/lifestyle]
+    # [3+: reszta wg oryginalnej kolejnosci]. Fashion (zdjecie stylizowane) ma byc
+    # zaraz po glownym ujeciu. Tylko gdy jest i fashion, i ujecie glowne; delete na
+    # koniec (i tak nie ide do galerii). Wylaczalne plan["gallery_order"]="raw".
+    if plan.get("gallery_order", "fashion_second") == "fashion_second":
+        non_del = [it for it in items if it["action"] != "delete"]
+        dels = [it for it in items if it["action"] == "delete"]
+        fashion = [it for it in non_del if it["fashion"]]
+        nonfash = [it for it in non_del if not it["fashion"]]
+        if fashion and nonfash:
+            items = [nonfash[0]] + fashion + nonfash[1:] + dels
     final_count = sum(1 for d in plan["decisions"] if d["action"] != "delete")
     backup_root = ido_backup_root()
     archived = bool(backup_root and

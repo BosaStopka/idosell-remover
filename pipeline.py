@@ -246,8 +246,9 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
     # PELNOKADROWE (detal/zblizenie wypelniajace kadr) tylko w glownym pipeline
     # (jest src_rgb). Edytor maski (compose_from, brak src_rgb) zawsze idzie
     # trybem minimal - patrz docstring compose_from.
-    full_bleed = (opt.get("full_bleed", False) and src_rgb is not None
-                  and is_full_bleed(rgba))
+    # opt["full_bleed"] ustawiane RECZNIE per zdjecie (przycisk "Bez ramki") -> FORCE
+    # (bez auto-detekcji is_full_bleed), bo user swiadomie chce pelny kadr bez ramki.
+    full_bleed = bool(opt.get("full_bleed")) and src_rgb is not None
 
     # ---- PELNOKADROWE (zblizenie/detal): TYLKO biel, bez kwadratu i bez pasow --
     # Detal wypelniajacy kadr zostaje w ORYGINALNYM kadrze i proporcjach -
