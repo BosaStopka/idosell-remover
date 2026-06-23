@@ -3264,6 +3264,58 @@ def allegro_bridge_execute():
     return jsonify(res)
 
 
+@app.post("/api/allegro/bridge/execute-batch")
+def allegro_bridge_execute_batch():
+    """Masowy push na Allegro: z product_ids buduje items=[{code, image_paths}]
+    (kod=productId, galeria z planu) i woła bg execute-batch. Dokleja product_id
+    do wynikow. Powtorka = wyslij ponownie tylko status error/partial."""
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"error": "Brak potwierdzenia"}), 400
+    pids = [str(p).strip() for p in (body.get("product_ids") or []) if str(p).strip()]
+    if not pids:
+        return jsonify({"error": "Brak product_ids"}), 400
+    items = []
+    for pid in pids:
+        try:
+            paths = _ido_final_image_paths(int(pid))
+        except (ValueError, TypeError):
+            paths = []
+        if paths:
+            items.append({"code": pid, "image_paths": paths})
+    if not items:
+        return jsonify({"error": "Brak finalnych galerii - czy produkty wyslane na IdoSell?"}), 409
+    try:
+        res = allegro_bridge.execute_batch(items)
+    except allegro_bridge.BridgeError as e:
+        return jsonify({"error": str(e)}), 502
+    for r in (res.get("results") or []):
+        r["product_id"] = r.get("code")
+    ido_audit("allegro_push_batch", 0,
+              {"summary": res.get("summary"), "count": len(items)})
+    return jsonify(res)
+
+
+@app.post("/api/allegro/bridge/rollback")
+def allegro_bridge_rollback():
+    """Cofnij CALY push modelu na Allegro (wszystkie warianty) - przez bg."""
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"error": "Brak potwierdzenia"}), 400
+    try:
+        product_id = int(body.get("product_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Brak/zly product_id"}), 400
+    try:
+        res = allegro_bridge.rollback(str(product_id))
+    except allegro_bridge.BridgeError as e:
+        ido_audit("allegro_rollback_error", product_id, {"error": str(e)})
+        return jsonify({"error": str(e)}), 502
+    ido_audit("allegro_rollback", product_id,
+              {"ok": res.get("ok"), "failed": res.get("failed")})
+    return jsonify(res)
+
+
 def _ido_rollback_one(product_id: int) -> dict:
     """Rdzen przywrocenia galerii z fizycznego backupu na dysku dla jednego
     produktu (zdjecia + ikony, weryfikacja GET-em). Zwraca dict wyniku albo

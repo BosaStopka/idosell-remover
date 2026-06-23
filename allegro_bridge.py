@@ -83,7 +83,21 @@ def preview(codes):
 
 
 def execute(code, image_paths, all_variants=True, confirm=True):
-    """A2 - zapis (wymaga confirm). Zwraca {results:[{id,ok,error?}], rollback}."""
+    """A2 - zapis (wymaga confirm). Zwraca {results:[{id,ok,verified,error?}], rollback}."""
     return _call("/api/allegro/push-from-shop/execute", {
         "code": code, "image_paths": list(image_paths),
         "all_variants": bool(all_variants), "confirm": bool(confirm)})
+
+
+def execute_batch(items, confirm=True):
+    """Masowy push: items=[{code, image_paths}]. Zwraca {summary, results:[{code,
+    model, status(ok|partial|error|skip), ok, failed, results:[{id,ok,verified}]}]}.
+    Dluzszy timeout - bg leci sekwencyjnie po wariantach z backoffem 429."""
+    return _call("/api/allegro/push-from-shop/execute-batch",
+                 {"items": list(items), "confirm": bool(confirm)}, timeout=600)
+
+
+def rollback(code, confirm=True):
+    """Cofa CALY push modelu (wszystkie warianty). Zwraca {ok, failed, results}."""
+    return _call("/api/allegro/push-from-shop/rollback",
+                 {"code": code, "confirm": bool(confirm)})

@@ -1195,43 +1195,65 @@ async function offerAllegroPush(ids) {
     const sel = [...document.querySelectorAll(".alg-check:checked")].map(c => c.value);
     if (!sel.length) { alert("Zaznacz przynajmniej jedną ofertę"); return; }
     $("allegroGo").disabled = true; $("allegroGo").textContent = `Wysyłanie ${sel.length}...`;
-    const out = [];
-    for (const pid of sel) {
-      const o = onAllegro.find(x => String(x.product_id) === pid) || {};
-      const label = o.code || pid;
-      try {
-        const r = await api("/api/allegro/bridge/execute", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ product_id: pid, confirm: true }),
-        });
-        const d = await r.json();
-        if (d.error) out.push(`<div style="color:var(--err)">${esc(label)}: ✗ ${esc(d.error)}</div>`);
-        else {
-          const res = d.results || [];
-          const ok = res.filter(x => x.ok).length;
-          const byId = {}; res.forEach(x => { byId[String(x.id)] = x; });
-          // rozwijana lista ofert z linkami do Allegro (klik -> otwiera ofertę)
-          const links = (o.offers || []).map(of => {
-            const rr = byId[String(of.id)] || {};
-            const st = of.status === "ENDED" ? "zakończona" : "aktywna";
-            const mark = rr.ok ? "✓" : (rr.error ? "✗" : "•");
-            const col = rr.ok ? "var(--accent2)" : (rr.error ? "var(--err)" : "var(--muted)");
-            return `<a href="https://allegro.pl/oferta/${esc(of.id)}" target="_blank" rel="noopener"
-              style="color:${col};text-decoration:none;display:inline-block;margin:2px 10px 2px 0"
-              title="${rr.error ? esc(rr.error) : st}">${mark} ${esc(of.sku)} (${st}) ↗</a>`;
-          }).join("");
-          out.push(`<details style="margin:4px 0" open>
-            <summary style="color:${ok === res.length ? "var(--ok)" : "#ff8a3d"};cursor:pointer">${esc(label)}: ${ok}/${res.length} ofert OK</summary>
-            <div style="padding:4px 0 8px 16px">${links}</div>
-          </details>`);
-        }
-      } catch { out.push(`<div style="color:var(--err)">${esc(label)}: ✗ błąd połączenia</div>`); }
+    let data;
+    try {                                  // masowy push jednym wywolaniem (execute-batch)
+      const r = await api("/api/allegro/bridge/execute-batch", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_ids: sel, confirm: true }),
+      });
+      data = await r.json();
+    } catch { data = { error: "Błąd połączenia" }; }
+    if (data.error) {
+      $("allegroBody").innerHTML = `<p style="color:var(--err)">✗ ${esc(data.error)}</p>`;
+      $("allegroGo").classList.add("hidden"); $("allegroSummary").textContent = ""; return;
     }
+    const ST = { ok: "var(--ok)", partial: "#ff8a3d", error: "var(--err)", skip: "var(--muted)" };
+    const out = (data.results || []).map(it => {
+      const pid = String(it.product_id || it.code);
+      const o = onAllegro.find(x => String(x.product_id) === pid) || {};
+      const byId = {}; (it.results || []).forEach(x => { byId[String(x.id)] = x; });
+      const links = (o.offers || []).map(of => {
+        const rr = byId[String(of.id)] || {};
+        const st = of.status === "ENDED" ? "zakończona" : "aktywna";
+        const mark = rr.ok ? (rr.verified === false ? "⚠" : "✓") : (rr.error ? "✗" : "•");
+        const col = rr.ok ? (rr.verified === false ? "#ff8a3d" : "var(--accent2)") : (rr.error ? "var(--err)" : "var(--muted)");
+        const vt = rr.verified === false ? " - weryfikacja: galeria niezgodna" : (rr.verified ? " - zweryfikowano" : "");
+        return `<a href="https://allegro.pl/oferta/${esc(of.id)}" target="_blank" rel="noopener"
+          style="color:${col};text-decoration:none;display:inline-block;margin:2px 10px 2px 0"
+          title="${esc((rr.error || st) + vt)}">${mark} ${esc(of.sku)} (${st}) ↗</a>`;
+      }).join("");
+      const label = it.code || pid;
+      const head = it.status === "skip"
+        ? `${esc(label)}: poza Allegro (pominięto)`
+        : `${esc(label)}: ${it.ok ?? 0}/${(it.ok ?? 0) + (it.failed ?? 0)} ofert OK${it.status === "partial" ? " (częściowo)" : ""}${it.error ? " - " + esc(it.error) : ""}`;
+      const canRb = it.status === "ok" || it.status === "partial";
+      return `<details style="margin:4px 0" open>
+        <summary style="color:${ST[it.status] || "var(--text)"};cursor:pointer">${head}</summary>
+        <div style="padding:4px 0 8px 16px">${links}
+          ${canRb ? `<div style="margin-top:6px"><a href="#" onclick="rollbackAllegro('${esc(pid)}', this); return false" style="color:var(--err)">↩ Cofnij push tego modelu na Allegro</a></div>` : ""}
+        </div>
+      </details>`;
+    }).join("");
+    const s = data.summary || {};
     $("allegroBody").innerHTML = `<p style="color:var(--ok);font-size:15px">Push na Allegro zakończony.</p>
-      <div style="max-height:320px;overflow:auto;margin-top:10px">${out.join("")}</div>
-      <p style="font-size:12.5px;color:var(--muted);margin-top:8px">Rollback per oferta po stronie bg-removera (audyt + backup).</p>`;
+      <p style="font-size:12.5px;color:var(--muted)">OK: ${s.ok || 0} · częściowo: ${s.partial || 0} · błąd: ${s.error || 0} · poza Allegro: ${s.skip || 0}</p>
+      <div style="max-height:340px;overflow:auto;margin-top:8px">${out}</div>`;
     $("allegroGo").classList.add("hidden"); $("allegroSummary").textContent = "";
   };
+}
+// "Cofnij push na Allegro" - rollback calego modelu (wszystkie warianty) przez bg
+async function rollbackAllegro(productId, el) {
+  if (!confirm("Cofnąć push tego modelu na Allegro?\nWszystkie warianty wrócą do stanu sprzed wysyłki (backup po stronie bg-removera).")) return;
+  if (el) el.textContent = "...";
+  try {
+    const r = await api("/api/allegro/bridge/rollback", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ product_id: productId, confirm: true }),
+    });
+    const d = await r.json();
+    if (d.error) { alert("Rollback: " + d.error); if (el) el.textContent = "↩ Cofnij push tego modelu na Allegro"; return; }
+    if (el) el.outerHTML = `<span style="color:var(--ok)">↩ Cofnięto: ${d.ok || 0}/${(d.ok || 0) + (d.failed || 0)} ofert</span>`;
+  } catch { alert("Błąd połączenia"); if (el) el.textContent = "↩ Cofnij push tego modelu na Allegro"; }
 }
 $("allegroCancel").addEventListener("click", () => $("allegroOverlay").classList.add("hidden"));
 
