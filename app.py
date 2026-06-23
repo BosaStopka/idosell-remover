@@ -486,7 +486,8 @@ def api_jobs():
             decs = plan.get("decisions") or []
             o["icons"] = next((d.get("icons") or [] for d in decs
                                if d.get("index") == idx), [])
-            o["gallery_pos"] = next((i for i, d in enumerate(decs)
+            ordered = _gallery_ordered(decs, plan.get("gallery_order", "fashion_second"))
+            o["gallery_pos"] = next((i for i, d in enumerate(ordered)
                                      if d.get("index") == idx), None)
             o["gallery_len"] = len(decs)
             o["executed"] = bool(plan.get("executed_at")) and not plan.get("rolled_back_at")
@@ -2839,6 +2840,23 @@ def save_ido_plan(product_id: int, plan: dict):
         json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _gallery_ordered(rows, mode="fashion_second"):
+    """Domyslna kolejnosc galerii: [1: glowny profil] [2: fashion/lifestyle]
+    [3+: reszta wg oryginalnej kolejnosci]; delete na koniec (i tak nie ide do
+    galerii). rows = decisions albo items (potrzebne pola: action, fashion).
+    mode 'raw' = bez zmian. Wspolne dla podgladu/wysylki (build_ido_plan_preview)
+    i pozycji w siatce Studio (gallery_pos) - zeby pokazywaly to samo."""
+    if mode != "fashion_second":
+        return list(rows)
+    non_del = [r for r in rows if r.get("action") != "delete"]
+    dels = [r for r in rows if r.get("action") == "delete"]
+    fashion = [r for r in non_del if r.get("fashion")]
+    nonfash = [r for r in non_del if not r.get("fashion")]
+    if fashion and nonfash:
+        return [nonfash[0]] + fashion + nonfash[1:] + dels
+    return list(rows)
+
+
 def build_ido_plan_preview(product_id: int) -> dict:
     """Sklada podglad: co zostanie wgrane / zostawione / usuniete."""
     plan = load_ido_plan(product_id)
@@ -2858,17 +2876,7 @@ def build_ido_plan_preview(product_id: int) -> dict:
             else:
                 ready = False
         items.append(item)
-    # DOMYSLNA kolejnosc galerii: [1: glowny profil produktu] [2: fashion/lifestyle]
-    # [3+: reszta wg oryginalnej kolejnosci]. Fashion (zdjecie stylizowane) ma byc
-    # zaraz po glownym ujeciu. Tylko gdy jest i fashion, i ujecie glowne; delete na
-    # koniec (i tak nie ide do galerii). Wylaczalne plan["gallery_order"]="raw".
-    if plan.get("gallery_order", "fashion_second") == "fashion_second":
-        non_del = [it for it in items if it["action"] != "delete"]
-        dels = [it for it in items if it["action"] == "delete"]
-        fashion = [it for it in non_del if it["fashion"]]
-        nonfash = [it for it in non_del if not it["fashion"]]
-        if fashion and nonfash:
-            items = [nonfash[0]] + fashion + nonfash[1:] + dels
+    items = _gallery_ordered(items, plan.get("gallery_order", "fashion_second"))
     final_count = sum(1 for d in plan["decisions"] if d["action"] != "delete")
     backup_root = ido_backup_root()
     archived = bool(backup_root and
