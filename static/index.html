@@ -1078,6 +1078,24 @@ async function processAnyway(pid, index) {
   startPolling();
 }
 
+// "Obrob to zdjecie" dla SIEROT z wygaszonej sesji (orig=None, brak maski):
+// pobiera zrodlo TEGO jednego zdjecia (url planu / fallback archiwum) i przerabia
+// tylko je (priorytet). Po tym zdjecie ma orig+maske -> Bez ramki/Podeszwa/edytor/
+// Oryginal dzialaja. Bez ruszania calego produktu.
+async function reprocessPhoto(pid, index, el) {
+  if (index == null) { alert("Brak indeksu zdjęcia"); return; }
+  busy(el);
+  const fd = optionsForm(new FormData());
+  fd.append("index", index);
+  fd.append("action", "process");
+  try {
+    const res = await api(`/api/idosell/products/${pid}/photo-action`, { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.error) { alert(data.error); unbusy(el); return; }
+    lastJobsKey = ""; startPolling();
+  } catch { alert("Błąd połączenia"); unbusy(el); }
+}
+
 // dodanie brakujacego zdjecia do produktu z LINKU (internet): pobierz, obrob,
 // dodaj na koniec galerii. Do uzupelniania produktow ktore maja za malo zdjec.
 async function addPhotoUrl(pid) {
@@ -1815,12 +1833,13 @@ function render() {
             ${j.kept ? `<button class="icon-btn accent" onclick="processAnyway('${esc(j.pid || pid)}', ${j.photo_index})" title="To NIE jest fashion - obrób mimo wszystko (wytnij tło)" aria-label="Obrób mimo to"><i class="ti ti-wand"></i></button>
               ${j.orig ? `<button class="icon-btn" onclick="replaceUrl('${j.id}')" title="Podmień to zdjęcie fashion na lepszą wersję z linku. ZOSTAJE 1:1, bez wycinania tła." aria-label="Zamień (link)"><i class="ti ti-link"></i></button>
               <button class="icon-btn" onclick="replaceFile('${j.id}')" title="Podmień to zdjęcie fashion na lepszą wersję z dysku. ZOSTAJE 1:1, bez wycinania tła." aria-label="Zamień (dysk)"><i class="ti ti-folder"></i></button>` : ""}`
-              : `${canRetry ? `<button class="icon-btn" onclick="retryJob('${j.id}', this)" title="Obrób ponownie z aktualnymi ustawieniami" aria-label="Ponów"><i class="ti ti-refresh"></i></button>` : ""}
+              : `${j.source === "idosell" && j.status === "done" && !j.orig && j.pid && j.photo_index != null ? `<button class="icon-btn accent" onclick="reprocessPhoto('${esc(j.pid)}', ${j.photo_index}, this)" title="Obrób to zdjęcie od nowa (pobiera źródło) - przywraca pełną edycję tego zdjęcia: Bez ramki, Podeszwa, edytor. Bez ruszania całego produktu." aria-label="Obrób to zdjęcie"><i class="ti ti-refresh"></i></button>` : ""}
+                 ${canRetry ? `<button class="icon-btn" onclick="retryJob('${j.id}', this)" title="Obrób ponownie z aktualnymi ustawieniami" aria-label="Ponów"><i class="ti ti-refresh"></i></button>` : ""}
                  ${j.status === "done" ? `<button class="icon-btn" onclick="flipPhoto('${j.id}')" title="Odbij lustrzanie (kierunek noska) - bez ponownej obróbki" aria-label="Odbij"><i class="ti ti-flip-horizontal"></i></button>` : ""}
                  ${j.status === "done" && j.editable !== false ? `<button class="icon-btn accent" onclick="smoothSole('${j.id}', this)" title="Podeszwa - wygładź ciemną, postrzępioną dolną krawędź w czystą linię (z maski, bez modelu). Dla ciemnych bieżników." aria-label="Podeszwa"><i class="ti ti-shoe"></i></button>` : ""}
                  ${j.status === "done" ? `<button class="icon-btn accent" onclick="cleanSole('${j.id}', this)" title="Wyczyść podeszwę - usuń przebarwienia/otarcia z białej podeszwy (frequency separation, faktura i kontur zachowane). Tylko studyjne na białym tle; fashion pomija." aria-label="Wyczyść podeszwę"><i class="ti ti-spray"></i></button>` : ""}
                  ${j.status === "done" && (j.orig || j.editable !== false) ? `<button class="icon-btn" onclick="${j.orig ? `retryFullBleed('${j.id}', this)` : `fullBleedFromMask('${j.id}', this)`}" title="Bez ramki - produkt na pełnym kadrze (dla ujęć wypełniających kadr). Bez oryginału (Affenzahn) liczy z maski." aria-label="Bez ramki"><i class="ti ti-maximize"></i></button>` : ""}
-                 ${j.status === "done" ? `<button class="icon-btn" onclick="keepOriginal('${j.id}', this)" title="Przywróć ORYGINAŁ 1:1 (cofnij wycięcie tła) - dla fashion/lifestyle" aria-label="Oryginał"><i class="ti ti-arrow-back-up"></i></button>` : ""}
+                 ${j.status === "done" && j.orig ? `<button class="icon-btn" onclick="keepOriginal('${j.id}', this)" title="Przywróć ORYGINAŁ 1:1 (cofnij wycięcie tła) - dla fashion/lifestyle" aria-label="Oryginał"><i class="ti ti-arrow-back-up"></i></button>` : ""}
                  ${(j.status === "done" || j.status === "error") && j.orig ? `<button class="icon-btn" onclick="replaceUrl('${j.id}')" title="Podmień źródło na lepsze z linku i przerób ponownie" aria-label="Zamień (link)"><i class="ti ti-link"></i></button>
                  <button class="icon-btn" onclick="replaceFile('${j.id}')" title="Podmień źródło na plik z dysku i przerób ponownie" aria-label="Zamień (dysk)"><i class="ti ti-folder"></i></button>` : ""}`}
             ${j.source === "idosell" && j.pid && j.photo_index != null ? `<button class="icon-btn danger" onclick="studioDelete('${esc(j.pid)}', ${j.photo_index})" title="Usuń to zdjęcie z produktu - nie pójdzie do galerii (jeśli było w sklepie, zniknie przy najbliższej wysyłce)" aria-label="Usuń"><i class="ti ti-trash"></i></button>` : ""}

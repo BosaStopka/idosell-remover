@@ -2857,8 +2857,19 @@ def idosell_photo_action(product_id):
         try:
             if dec.get("extra"):   # zdjecie dodane z dysku
                 data = (EXTRAS_DIR / dec["extra"]).read_bytes()
-            else:
+            elif dec.get("url"):
                 data = idosell_client.download_image(dec["url"])
+            else:
+                # sierota z wygaszonej sesji (brak url) -> oryginal z trwalego
+                # archiwum po slocie / image_id (D:\idosell_backup\{pid})
+                arch = _archived_images(product_id) or []
+                ae = next((a for a in arch
+                           if str(a.get("slot")) == str(dec.get("slot"))
+                           or _id_stem(a.get("id")) == _id_stem(dec.get("image_id"))), None)
+                if ae is None:
+                    return jsonify({"error": "Brak zrodla zdjecia (url i archiwum) "
+                                             "- zrob pelny reprocess produktu"}), 404
+                data = ae["data"]
         except (idosell_client.IdoSellError, OSError) as e:
             return jsonify({"error": f"Pobranie zdjecia: {e}"}), 400
         if action == "keep":
