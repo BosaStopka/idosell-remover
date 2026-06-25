@@ -612,6 +612,13 @@ def compose_from(rgb: Image.Image, alpha: Image.Image, opt: dict) -> Image.Image
     BEZ src_rgb -> compose idzie trybem MINIMAL (full_bleed i ZACHOWAJ
     wymagaja src_rgb): wymazane piksele -> CZYSTA BIEL, jak oczekuje edytor."""
     options = {**DEFAULTS, **opt}
+    a = alpha.convert("L")
+    # WYGLADZENIE krawedzi: twarde pociagniecia pedzla w edytorze zostawialy
+    # ostre, postrzepione piksele. Delikatny gaussian na alfie daje miekka,
+    # antyaliasowana krawedz. BEZ erozji/utwardzania (jak refine_edges) - przy
+    # recznej korekcie nie chcemy zjadac bryly ani przywracac twardych pikseli.
+    feather = max(float(options.get("edge_feather", 1.0)), 2.0)
+    a = a.filter(ImageFilter.GaussianBlur(feather))
     rgba = rgb.convert("RGB").copy()
-    rgba.putalpha(alpha.convert("L"))
+    rgba.putalpha(a)
     return compose(rgba, options)

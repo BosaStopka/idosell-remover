@@ -414,7 +414,7 @@
         <label style="font-size:12px;color:var(--muted)">Rozmiar
           <input type="range" id="edBrushSize" min="6" max="120" value="36" style="width:110px;vertical-align:middle">
         </label>
-        <button class="btn btn-ghost" id="edUndo" title="Cofnij pociągnięcie">↶ Cofnij</button>
+        <button class="btn btn-ghost" id="edUndo" title="Cofnij pociągnięcie (Ctrl+Z)">↶ Cofnij</button>
       </div>
       <div class="ed-group" style="flex:1;min-width:220px">
         <span style="font-size:11px;color:var(--muted)">PRZED</span>
@@ -2766,7 +2766,7 @@ async function openEditor(jobId) {
   ed.undo = [];
   $("edTitle").textContent = data.name;
   $("edStatus").textContent = data.editable
-    ? "scroll = zoom · spacja+przeciągnij = przesuń · 0 = reset" : "";
+    ? "scroll = zoom · spacja+przeciągnij = przesuń · 0 = reset · Ctrl+Z = cofnij" : "";
   $("edBrushTools").style.display = data.editable ? "flex" : "none";
   $("edApply").style.display = data.editable ? "" : "none";
 
@@ -2873,6 +2873,12 @@ function edUpdateCursor(e) {
 }
 function edHideCursor() { const c = $("edCursor"); if (c) c.style.display = "none"; }
 
+// cofnij jedno pociagniecie (przycisk + Ctrl+Z)
+function edUndoOnce() {
+  const prev = ed.undo.pop();
+  if (prev) { ed.maskCtx.putImageData(prev, 0, 0); edComposite(); }
+}
+
 function bindEditor() {
   const result = $("edResult");
   result.addEventListener("pointerdown", e => {
@@ -2937,6 +2943,8 @@ function bindEditor() {
       e.preventDefault();
     } else if (e.key === "0") {
       ed.zoom = 1; ed.panX = 0; ed.panY = 0; edApplyTransform();
+    } else if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
+      e.preventDefault(); edUndoOnce();   // Ctrl+Z = cofnij pociagniecie
     }
   });
   document.addEventListener("keyup", e => {
@@ -2955,10 +2963,7 @@ function bindEditor() {
     $("edErase").classList.add("on"); $("edRestore").classList.remove("on");
   });
   $("edBrushSize").addEventListener("input", e => ed.size = +e.target.value);
-  $("edUndo").addEventListener("click", () => {
-    const prev = ed.undo.pop();
-    if (prev) { ed.maskCtx.putImageData(prev, 0, 0); edComposite(); }
-  });
+  $("edUndo").addEventListener("click", edUndoOnce);
   $("edSplit").addEventListener("input", edSplitUpdate);
   $("edClose").addEventListener("click", () => $("editorOverlay").classList.add("hidden"));
   $("edApply").addEventListener("click", edApply);
