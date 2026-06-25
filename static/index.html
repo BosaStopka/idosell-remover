@@ -52,6 +52,8 @@
     background: linear-gradient(135deg, var(--accent), var(--accent2));
     display: grid; place-items: center; font-size: 22px;
   }
+  .logo-img { height: 36px; width: auto; display: block; }     /* logo Bosa Stopka w naglowku */
+  .overlay .logo-img { height: 48px; margin: 0 auto 16px; }    /* logo na ekranie logowania */
   header h1 { font-size: 20px; font-weight: 600; }
   header p { color: var(--muted); font-size: 13px; }
   .tabs { margin-left: auto; display: flex; gap: 6px; }
@@ -454,8 +456,8 @@
 
 <div class="overlay" id="loginOverlay">
   <div class="panel">
-    <div class="logo">👟</div>
-    <h1 style="font-size:18px">Bosa Stopka - Studio Zdjęć</h1>
+    <img class="logo-img" src="/static/logo_bosastopka.svg" alt="Bosa Stopka">
+    <h1 style="font-size:18px">Studio Zdjęć</h1>
     <input type="password" id="pinInput" maxlength="6" placeholder="••••••" autocomplete="off">
     <div class="error" id="pinError"></div>
     <button class="btn btn-primary w100" id="pinBtn">Odblokuj</button>
@@ -464,9 +466,9 @@
 </div>
 
 <header>
-  <div class="logo">👟</div>
+  <img class="logo-img" src="/static/logo_bosastopka.svg" alt="Bosa Stopka">
   <div>
-    <h1>Bosa Stopka - Studio Zdjęć</h1>
+    <h1>Studio Zdjęć</h1>
     <p>Wycinanie tła, cień i kadr 1:1 - gotowe na Allegro i do sklepu</p>
   </div>
   <nav class="tabs">
