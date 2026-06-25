@@ -2766,7 +2766,7 @@ async function openEditor(jobId) {
   ed.undo = [];
   $("edTitle").textContent = data.name;
   $("edStatus").textContent = data.editable
-    ? "scroll = zoom · spacja+przeciągnij = przesuń · 0 = reset · Ctrl+Z = cofnij" : "";
+    ? "scroll = zoom · spacja+przeciągnij = przesuń · 0 = reset · Ctrl+Z = cofnij · Shift+klik = linia prosta" : "";
   $("edBrushTools").style.display = data.editable ? "flex" : "none";
   $("edApply").style.display = data.editable ? "" : "none";
 
@@ -2892,8 +2892,15 @@ function bindEditor() {
     if ($("edBrushTools").style.display === "none") return;
     ed.undo.push(ed.maskCtx.getImageData(0, 0, ed.mask.width, ed.mask.height));
     if (ed.undo.length > 15) ed.undo.shift();
+    const p = edPos(e);
+    if (e.shiftKey && ed.last) {   // Shift+klik = LINIA PROSTA od ostatniego punktu
+      edStroke(ed.last, p);        // (prosta krawedz - np. bok podeszwy - bez drzenia reki)
+      ed.last = p;
+      edComposite();
+      return;                      // bez freehand - to dyskretny odcinek
+    }
     ed.drawing = true;
-    ed.last = edPos(e);
+    ed.last = p;
     edStroke(ed.last, ed.last);
     edComposite();
     result.setPointerCapture(e.pointerId);
