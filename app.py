@@ -3297,6 +3297,214 @@ def _ido_final_image_paths(product_id: int) -> list:
     return paths
 
 
+# ---- async wysylka (IdoSell -> Allegro) w tle: kolejka + magazyn wynikow.
+# ADDITIVE: synchroniczne /execute, /bulk-execute, /bridge/execute zostaja jako
+# rdzen/bezpiecznik. Worker per produkt robi IdoSell (pelny _ido_execute_one),
+# a po sukcesie push na Allegro - oba poza krytyczna sciezka usera. ----
+def _now_str():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def persist_sends():
+    with send_lock:
+        snap = list(send_records.values())
+    try:
+        SENDS_STATE_FILE.write_text(json.dumps(snap, ensure_ascii=False),
+                                    encoding="utf-8")
+    except OSError:
+        pass
+
+
+def restore_sends():
+    if not SENDS_STATE_FILE.exists():
+        return
+    try:
+        snap = json.loads(SENDS_STATE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    for rec in snap:
+        pid = str(rec.get("product_id") or "")
+        if not pid:
+            continue
+        # migracja: stare bledy "Brak ofert" (sprzed fix-a klasyfikacji) -> skip
+        al = rec.get("allegro") or {}
+        if al.get("status") == "error" and "Brak ofert" in str(al.get("error") or ""):
+            rec["allegro"] = {"status": "skip", "reason": "brak ofert na Allegro"}
+        if rec.get("state") in ("queued", "running"):  # przerwane restartem -> wznow
+            rec["state"] = "queued"
+            send_records[pid] = rec
+            send_queue.put(pid)
+        else:
+            send_records[pid] = rec
+
+
+def _send_set(pid, **kw):
+    with send_lock:
+        rec = send_records.get(pid) or {"product_id": pid}
+        rec.update(kw); rec["ts"] = _now_str()
+        send_records[pid] = rec
+    persist_sends()
+
+
+def enqueue_send(product_id, mode="full") -> bool:
+    """Dokolejkowuje produkt do wysylki w tle. mode 'full' = IdoSell + Allegro;
+    mode 'allegro' = tylko Allegro (pomija push IdoSell - dla osobnego modala)."""
+    pid = str(product_id)
+    with send_lock:
+        rec = send_records.get(pid) or {"product_id": pid}
+        rec.update({"state": "queued", "reviewed": False, "ts": _now_str(), "mode": mode,
+                    "ido": {"status": "pending"}, "allegro": {"status": "pending"}})
+        send_records[pid] = rec
+    persist_sends()
+    send_queue.put(pid)
+    return True
+
+
+def send_worker():
+    """Per produkt: IdoSell (pelny wzorzec bezpieczenstwa) -> po sukcesie Allegro.
+    Throttling na poziomie produktow; bg robi backoff 429 per wariant."""
+    while True:
+        pid = send_queue.get()
+        if pid not in send_records:
+            continue
+        _send_set(pid, state="running")
+        mode = send_records[pid].get("mode", "full")
+        # --- etap 1: IdoSell (pomijany w trybie 'allegro') ---
+        if mode == "allegro":
+            with send_lock:
+                send_records[pid]["ido"] = {"status": "skip", "reason": "tylko Allegro"}
+            ido_ok = True
+            persist_sends()
+        else:
+            with send_lock:
+                send_records[pid]["ido"] = {"status": "sending"}
+            persist_sends()
+            ido_ok = False
+            try:
+                r = _ido_execute_one(int(pid))
+                v = r.get("verify") or {}
+                with send_lock:
+                    send_records[pid]["ido"] = {
+                        "status": "ok" if v.get("ok") else "warn",
+                        "verify": v, "final_count": r.get("final_count")}
+                ido_ok = True
+            except Exception as e:   # IdoExecError i inne - jeden produkt nie wywala workera
+                with send_lock:
+                    send_records[pid]["ido"] = {"status": "error", "error": str(e)}
+                ido_audit("send_ido_error", int(pid) if pid.isdigit() else 0, {"error": str(e)})
+            persist_sends()
+        # --- etap 2: Allegro (tylko gdy IdoSell przeszedl i most aktywny) ---
+        if not ido_ok:
+            with send_lock:
+                send_records[pid]["allegro"] = {"status": "skip", "reason": "IdoSell nieudany"}
+            _send_set(pid, state="done")
+            continue
+        if allegro_bridge.load_config() is None:
+            with send_lock:
+                send_records[pid]["allegro"] = {"status": "skip", "reason": "most nieaktywny"}
+            _send_set(pid, state="done")
+            time.sleep(SEND_THROTTLE_S)
+            continue
+        with send_lock:
+            send_records[pid]["allegro"] = {"status": "sending"}
+        persist_sends()
+        try:
+            paths = _ido_final_image_paths(int(pid))
+            if not paths:
+                raise RuntimeError("Brak finalnej galerii")
+            res = allegro_bridge.execute(str(pid), paths)
+            offers = res.get("results") or []
+            ok_c = sum(1 for o in offers if o.get("ok"))
+            failed = len(offers) - ok_c
+            if not offers:
+                status = "skip"      # produkt nie ma ofert na Allegro - to NIE blad
+            else:
+                status = "ok" if failed == 0 else "partial" if ok_c else "error"
+            al_rec = {"status": status, "offers": offers, "ok_count": ok_c,
+                      "failed_count": failed, "model": res.get("model")}
+            if status == "skip":
+                al_rec["reason"] = "brak ofert na Allegro"
+            with send_lock:
+                send_records[pid]["allegro"] = al_rec
+            ido_audit("send_allegro", int(pid), {"status": status, "ok": ok_c, "failed": failed})
+        except Exception as e:   # noqa: BLE001
+            msg = str(e)
+            if "Brak ofert" in msg:   # produkt nie ma ofert na Allegro - to NIE blad, tylko skip
+                with send_lock:
+                    send_records[pid]["allegro"] = {"status": "skip", "reason": "brak ofert na Allegro"}
+            else:
+                with send_lock:
+                    send_records[pid]["allegro"] = {"status": "error", "error": msg}
+                ido_audit("send_allegro_error", int(pid) if pid.isdigit() else 0, {"error": msg})
+        _send_set(pid, state="done")
+        time.sleep(SEND_THROTTLE_S)
+
+
+restore_sends()
+threading.Thread(target=send_worker, daemon=True).start()
+
+
+def _send_problem(rec) -> bool:
+    if rec.get("reviewed"):
+        return False
+    return (rec.get("ido", {}).get("status") == "error"
+            or rec.get("allegro", {}).get("status") in ("error", "partial"))
+
+
+@app.get("/api/sends")
+def sends_list():
+    """Zakladka 'Do sprawdzenia': pozycje + statystyki + sent_ids (do 'ukryj wyslane').
+    Sort: problemy nieprzejrzane na wierzchu, w grupie najnowsze pierwsze."""
+    with send_lock:
+        items = list(send_records.values())
+
+    def prio(r):
+        if _send_problem(r):
+            return 0
+        if r.get("state") == "running":
+            return 1
+        if r.get("state") == "queued":
+            return 2
+        return 3
+    items.sort(key=lambda r: r.get("ts") or "", reverse=True)
+    items.sort(key=prio)
+    stats = {
+        "queued": sum(1 for r in items if r.get("state") == "queued"),
+        "running": sum(1 for r in items if r.get("state") == "running"),
+        "done": sum(1 for r in items if r.get("state") == "done"),
+        "problems": sum(1 for r in items if _send_problem(r)),
+    }
+    return jsonify({"items": items, "stats": stats,
+                    "sent_ids": [r.get("product_id") for r in items]})
+
+
+@app.post("/api/sends/enqueue")
+def sends_enqueue():
+    body = request.get_json(silent=True) or {}
+    pids = [str(p).strip() for p in (body.get("product_ids") or []) if str(p).strip()]
+    if not pids:
+        return jsonify({"error": "Brak product_ids"}), 400
+    mode = body.get("mode") if body.get("mode") in ("full", "allegro") else "full"
+    n = sum(1 for pid in pids if enqueue_send(pid, mode))
+    return jsonify({"ok": True, "queued": n})
+
+
+@app.post("/api/sends/<int:product_id>/retry")
+def sends_retry(product_id):
+    enqueue_send(product_id)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/sends/<int:product_id>/dismiss")
+def sends_dismiss(product_id):
+    with send_lock:
+        rec = send_records.get(str(product_id))
+        if rec:
+            rec["reviewed"] = True
+    persist_sends()
+    return jsonify({"ok": True})
+
+
 @app.get("/api/allegro/bridge/status")
 def allegro_bridge_status():
     """Czy most do bg-removera jest skonfigurowany (allegro_bridge_config.json)."""

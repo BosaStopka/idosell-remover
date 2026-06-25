@@ -446,6 +446,7 @@
     <button class="tab active" data-tab="studio">Obróbka</button>
     <button class="tab" data-tab="idosell">IdoSell</button>
     <button class="tab" data-tab="allegro">Allegro</button>
+    <button class="tab" data-tab="sends">Do sprawdzenia <span id="sendsBadge" class="badge" style="display:none;margin-left:4px;background:var(--err);color:#fff;border:none">0</span></button>
   </nav>
   <span id="queueBadge" class="badge hidden" style="margin-left:16px" title="Kolejka obróbki - ile zdjęć czeka/w trakcie + szacowany czas do końca"></span>
   <span id="ramBadge" class="badge" style="margin-left:10px" title="Wolna pamięć RAM - model potrzebuje ~2 GB">RAM: ...</span>
@@ -593,8 +594,10 @@
         <button class="btn btn-ghost hidden" id="idoClearSelBtn" title="Odznacz wszystkie zaznaczone produkty (czyści zaznaczenie, niczego nie wysyła ani nie cofa)">✕ Wyczyść zaznaczenie</button>
         <button class="btn btn-ghost hidden" id="idoRollbackBtn" style="color:var(--err);border-color:var(--err)" title="Przywróć zaznaczone produkty z backupu na dysku (cofa wysyłkę - działa kiedykolwiek)">↩ Cofnij zaznaczone</button>
         <button class="btn btn-ghost" id="idoRollbackIdsBtn" style="color:var(--err);border-color:var(--err)" title="Hurtowy rollback: wpisz/wklej listę ID (po przecinku/spacji/enterze) - przywróci je z backupu, bez zaznaczania">⌨ Cofnij z listy ID</button>
-        <label style="font-size:13px;color:var(--muted);display:flex;align-items:center;gap:5px" title="Ukryj produkty, które mają już lokalne wyniki (obrobione/wysłane)">
+        <label style="font-size:13px;color:var(--muted);display:flex;align-items:center;gap:5px" title="Ukryj produkty, które mają już lokalne wyniki obróbki">
           <input type="checkbox" id="idoHideDone" style="accent-color:var(--accent)"> ukryj obrobione</label>
+        <label style="font-size:13px;color:var(--muted);display:flex;align-items:center;gap:5px" title="Ukryj produkty już wysłane do IdoSell">
+          <input type="checkbox" id="idoHideSent" style="accent-color:var(--accent)"> ukryj wysłane</label>
         <select id="idoViewMode" style="margin-left:auto">
           <option value="all" selected>Wszystkie produkty (bez tagu Archiwum)</option>
           <option value="needs">Tylko do obróbki (wynik skanu)</option>
@@ -699,6 +702,20 @@
       </div>
     </div>
   </div>
+
+  <!-- ===== ZAKLADKA DO SPRAWDZENIA (async wysylki IdoSell -> Allegro) ===== -->
+  <div id="tab-sends" class="hidden">
+    <div class="panel">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <h2 style="margin:0">Do sprawdzenia</h2>
+        <span id="sendsStats" style="font-size:12.5px;color:var(--muted)"></span>
+        <input id="sendsSearch" placeholder="Szukaj: ID / model / aukcja"
+               style="margin-left:auto;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);width:240px">
+      </div>
+      <div id="sendsFilters" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
+      <div id="sendsList"></div>
+    </div>
+  </div>
 </main>
 
 <script>
@@ -728,10 +745,11 @@ async function tryLogin() {
 document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
   document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
   t.classList.add("active");
-  for (const name of ["studio", "idosell", "allegro"])
+  for (const name of ["studio", "idosell", "allegro", "sends"])
     $(`tab-${name}`).classList.toggle("hidden", t.dataset.tab !== name);
   if (t.dataset.tab === "allegro") allegroStatus();
   if (t.dataset.tab === "idosell") idosellStatus();
+  if (t.dataset.tab === "sends") { fetchSends(); renderSends(); }
 }));
 
 // ---------- opcje ----------
@@ -1125,32 +1143,22 @@ $("bulkCancel").addEventListener("click", () => $("bulkOverlay").classList.add("
 $("bulkGo").addEventListener("click", async () => {
   const ids = [...document.querySelectorAll(".bulk-check:checked")].map(c => c.value);
   if (!ids.length) { alert("Zaznacz przynajmniej jeden produkt"); return; }
-  $("bulkGo").disabled = true; $("bulkGo").textContent = `Wysyłanie ${ids.length}...`;
+  $("bulkGo").disabled = true; $("bulkGo").textContent = `Kolejkowanie ${ids.length}...`;
   let data;
-  try {
-    const res = await api("/api/idosell/bulk-execute", {
+  try {                                  // ASYNC: wrzuca do kolejki tla (IdoSell -> Allegro),
+    const res = await api("/api/sends/enqueue", {   // wraca natychmiast, nie blokuje
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: true, product_ids: ids }),
+      body: JSON.stringify({ product_ids: ids }),
     });
     data = await res.json();
   } catch { data = { error: "Błąd połączenia" }; }
   if (data.error) { alert(data.error); $("bulkGo").disabled = false; $("bulkGo").textContent = "📤 Wyślij zaznaczone do IdoSell"; return; }
-  const rows = (data.results || []).map(r =>
-    `<div style="font-size:12.5px;padding:3px 0;color:${r.ok ? (r.verified === false ? "#ff8a3d" : "var(--ok)") : "var(--err)"}">
-      ID ${esc(r.id)}: ${r.ok ? (r.verified === false ? "⚠ wysłane, weryfikacja niezgodna" : `✓ wysłane (${r.final_count} zdjęć)`) : "✗ " + esc(r.error || "")}
-    </div>`).join("");
-  const sentIds = (data.results || []).filter(r => r.ok).map(r => String(r.id));
-  $("bulkBody").innerHTML = `<p style="color:var(--ok);font-size:15px">✅ Wysłano ${data.ok}/${data.ok + data.failed} produktów.</p>
-    <div style="max-height:320px;overflow:auto;margin-top:10px">${rows}</div>
-    ${sentIds.length ? `<button class="btn btn-ghost" id="bulkUndo" style="margin-top:10px;border-color:var(--err);color:var(--err)">↩ Cofnij wszystkie wysłane (${sentIds.length})</button>` : ""}
-    <p style="font-size:12.5px;color:var(--muted);margin-top:8px">Backup i rollback per produkt: originals/idosell/{ID}/ · oryginały: D:\\idosell_backup · dziennik: idosell_audit.jsonl</p>`;
+  $("bulkBody").innerHTML = `<p style="color:var(--ok);font-size:15px">✅ Zakolejkowano ${data.queued} produktów.</p>
+    <p style="font-size:13px;color:var(--muted);margin-top:8px">Lecą w tle: <b>IdoSell → Allegro</b>. Status na żywo w zakładce <b>Do sprawdzenia</b>. Możesz dalej obrabiać kolejne zdjęcia.</p>`;
   $("bulkGo").classList.add("hidden");
   $("bulkSummary").textContent = "";
-  const undoBtn = $("bulkUndo");
-  if (undoBtn) undoBtn.addEventListener("click", () => bulkRollback(sentIds));
-  loadIdoProducts(true);
-  lastJobsKey = ""; refresh();
-  offerAllegroPush(sentIds);
+  fetchSends();                          // odswiez kolejke/badge; z "Ukryj wysłane" znikna z obrobki
+  lastJobsKey = ""; render();
 });
 
 // ---------- most Allegro (push po udanej wyslce na IdoSell; kontrakt v0.2) -------
@@ -1206,12 +1214,12 @@ async function offerAllegroPush(ids) {
   $("allegroGo").onclick = async () => {
     const sel = [...document.querySelectorAll(".alg-check:checked")].map(c => c.value);
     if (!sel.length) { alert("Zaznacz przynajmniej jedną ofertę"); return; }
-    $("allegroGo").disabled = true; $("allegroGo").textContent = `Wysyłanie ${sel.length}...`;
+    $("allegroGo").disabled = true; $("allegroGo").textContent = `Kolejkowanie ${sel.length}...`;
     let data;
-    try {                                  // masowy push jednym wywolaniem (execute-batch)
-      const r = await api("/api/allegro/bridge/execute-batch", {
+    try {                                  // ASYNC: kolejka tla, tryb tylko-Allegro (bez re-pushu IdoSell)
+      const r = await api("/api/sends/enqueue", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ product_ids: sel, confirm: true }),
+        body: JSON.stringify({ product_ids: sel, mode: "allegro" }),
       });
       data = await r.json();
     } catch { data = { error: "Błąd połączenia" }; }
@@ -1219,38 +1227,10 @@ async function offerAllegroPush(ids) {
       $("allegroBody").innerHTML = `<p style="color:var(--err)">✗ ${esc(data.error)}</p>`;
       $("allegroGo").classList.add("hidden"); $("allegroSummary").textContent = ""; return;
     }
-    const ST = { ok: "var(--ok)", partial: "#ff8a3d", error: "var(--err)", skip: "var(--muted)" };
-    const out = (data.results || []).map(it => {
-      const pid = String(it.product_id || it.code);
-      const o = onAllegro.find(x => String(x.product_id) === pid) || {};
-      const byId = {}; (it.results || []).forEach(x => { byId[String(x.id)] = x; });
-      const links = (o.offers || []).map(of => {
-        const rr = byId[String(of.id)] || {};
-        const st = of.status === "ENDED" ? "zakończona" : "aktywna";
-        const mark = rr.ok ? (rr.verified === false ? "⚠" : "✓") : (rr.error ? "✗" : "•");
-        const col = rr.ok ? (rr.verified === false ? "#ff8a3d" : "var(--accent2)") : (rr.error ? "var(--err)" : "var(--muted)");
-        const vt = rr.verified === false ? " - weryfikacja: galeria niezgodna" : (rr.verified ? " - zweryfikowano" : "");
-        return `<a href="https://allegro.pl/oferta/${esc(of.id)}" target="_blank" rel="noopener"
-          style="color:${col};text-decoration:none;display:inline-block;margin:2px 10px 2px 0"
-          title="${esc((rr.error || st) + vt)}">${mark} ${esc(of.sku)} (${st}) ↗</a>`;
-      }).join("");
-      const label = it.code || pid;
-      const head = it.status === "skip"
-        ? `${esc(label)}: poza Allegro (pominięto)`
-        : `${esc(label)}: ${it.ok ?? 0}/${(it.ok ?? 0) + (it.failed ?? 0)} ofert OK${it.status === "partial" ? " (częściowo)" : ""}${it.error ? " - " + esc(it.error) : ""}`;
-      const canRb = it.status === "ok" || it.status === "partial";
-      return `<details style="margin:4px 0" open>
-        <summary style="color:${ST[it.status] || "var(--text)"};cursor:pointer">${head}</summary>
-        <div style="padding:4px 0 8px 16px">${links}
-          ${canRb ? `<div style="margin-top:6px"><a href="#" onclick="rollbackAllegro('${esc(pid)}', this); return false" style="color:var(--err)">↩ Cofnij push tego modelu na Allegro</a></div>` : ""}
-        </div>
-      </details>`;
-    }).join("");
-    const s = data.summary || {};
-    $("allegroBody").innerHTML = `<p style="color:var(--ok);font-size:15px">Push na Allegro zakończony.</p>
-      <p style="font-size:12.5px;color:var(--muted)">OK: ${s.ok || 0} · częściowo: ${s.partial || 0} · błąd: ${s.error || 0} · poza Allegro: ${s.skip || 0}</p>
-      <div style="max-height:340px;overflow:auto;margin-top:8px">${out}</div>`;
+    $("allegroBody").innerHTML = `<p style="color:var(--ok);font-size:15px">✅ Zakolejkowano ${data.queued} ofert.</p>
+      <p style="font-size:13px;color:var(--muted);margin-top:8px">Push na Allegro leci w tle (tylko Allegro, bez ruszania IdoSell). Status na żywo w zakładce <b>Do sprawdzenia</b>.</p>`;
     $("allegroGo").classList.add("hidden"); $("allegroSummary").textContent = "";
+    fetchSends();
   };
 }
 // "Cofnij push na Allegro" - rollback calego modelu (wszystkie warianty) przez bg
@@ -1359,12 +1339,112 @@ async function refresh() {
   hadActiveAllegro = activeAllegro;
   if (hadActiveIdo && !activeIdo) loadIdoProducts(true);
   hadActiveIdo = activeIdo;
-  if (!active && polling) { clearInterval(polling); polling = null; }
+  if (!globalActive && polling) { clearInterval(polling); polling = null; }
 }
 function startPolling() {
   if (!polling) polling = setInterval(refresh, 1500);
   refresh();
 }
+
+// ===== zakladka "Do sprawdzenia": async wysylki (IdoSell -> Allegro) =====
+function _sendProblem(r) {
+  if (r.reviewed) return false;
+  return (r.ido && r.ido.status === "error") ||
+         (r.allegro && ["error", "partial"].includes(r.allegro.status));
+}
+async function fetchSends() {
+  let d;
+  try { d = await (await api("/api/sends")).json(); } catch { return; }
+  const prevSize = sentIdSet.size;
+  sendsData = d;
+  sentIdSet = new Set((d.sent_ids || []).map(String));
+  const st = d.stats || {};
+  const b = $("sendsBadge");
+  if (b) {
+    const act = (st.queued || 0) + (st.running || 0);
+    if (st.problems > 0) { b.style.display = ""; b.textContent = st.problems; b.style.background = "var(--err)"; }
+    else if (act > 0) { b.style.display = ""; b.textContent = act; b.style.background = "var(--accent2)"; }
+    else b.style.display = "none";
+  }
+  const key = JSON.stringify(d.items);
+  if (key !== lastSendsKey) {     // re-render tylko przy zmianie (bez migotania)
+    lastSendsKey = key;
+    if (!$("tab-sends").classList.contains("hidden")) renderSends();
+  }
+  if (hideSent && prevSize !== sentIdSet.size) { lastJobsKey = ""; render(); }
+}
+setInterval(fetchSends, 2500);
+
+function _sendBadge(label, status) {
+  const col = { ok: "var(--ok)", warn: "#ff8a3d", partial: "#ff8a3d", error: "var(--err)",
+                sending: "var(--accent2)", queued: "var(--muted)", pending: "var(--muted)",
+                skip: "var(--muted)" }[status] || "var(--muted)";
+  const ic = { ok: "✓", warn: "⚠", partial: "⚠", error: "✗", sending: "…",
+               queued: "•", pending: "•", skip: "–" }[status] || "•";
+  return `<span style="color:${col};font-size:12px">${label} ${ic}</span>`;
+}
+function renderSendRow(r) {
+  const ido = r.ido || {}, al = r.allegro || {};
+  const offers = al.offers || [];
+  const pid = String(r.product_id);
+  const prob = _sendProblem(r);
+  const warn = ido.status === "warn";
+  const auctions = offers.map(o =>
+    `<a href="https://allegro.pl/oferta/${esc(o.id)}" target="_blank" style="color:${o.ok ? "var(--accent2)" : "var(--err)"};font-size:11.5px;margin-right:9px">${esc(o.id)}${o.ok ? "" : " ✗"}</a>`).join("");
+  const vCount = offers.length ? `warianty ${al.ok_count || 0}/${offers.length}` : "";
+  // info o ⚠ IdoSell: weryfikacja niezgodna = sloty nie 1..N (zwykle benign)
+  const v = ido.verify || {};
+  const idoWarn = warn ? `<div style="color:#ff8a3d">IdoSell ⚠ weryfikacja: ${v.count != null ? v.count + " zdjęć, " : ""}sloty ${(v.slots || []).join(",") || "?"} (oczekiwano 1..${v.expected != null ? v.expected : "?"})${v.icons_ok === false ? `, brak ikon: ${(v.icons_missing || []).join(",")}` : ""}. Numeracja slotów - galeria i tak idzie po priorytecie, zwykle nieszkodliwe.</div>` : "";
+  const detailHtml = `${ido.error ? `<div style="color:var(--err)">IdoSell: ${esc(ido.error)}</div>` : ""}
+      ${idoWarn}
+      ${al.error ? `<div style="color:var(--err)">Allegro: ${esc(al.error)}</div>` : ""}
+      ${al.reason ? `<div style="color:var(--muted)">Allegro: ${esc(al.reason)}</div>` : ""}
+      ${auctions ? `<div style="margin-top:3px">${auctions}</div>` : ""}`;
+  const hasDetail = !!(ido.error || idoWarn || al.error || al.reason || auctions);
+  const open = prob || warn || expandedSends.has(pid);   // problemy/warn rozwiniete; OK zwiniete
+  const bcol = prob ? "var(--err)" : warn ? "#ff8a3d55" : "var(--line)";
+  return `<div style="border:1px solid ${bcol};border-radius:10px;padding:9px 12px;margin-bottom:8px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;cursor:${hasDetail ? "pointer" : "default"}" ${hasDetail ? `onclick="toggleSend('${esc(pid)}')"` : ""}>
+      <span style="width:10px;color:var(--muted);font-size:10px">${hasDetail ? (open ? "▾" : "▸") : ""}</span>
+      <b style="min-width:48px">${esc(pid)}</b>
+      ${_sendBadge("IdoSell", ido.status || "pending")}
+      ${_sendBadge("Allegro", al.status || "pending")}
+      ${vCount ? `<span style="font-size:12px;color:var(--muted)">${vCount}</span>` : ""}
+      <span style="font-size:11.5px;color:var(--muted);margin-left:auto">${esc(r.ts || "")}</span>
+      ${prob ? `<button class="btn btn-ghost" style="padding:3px 9px;font-size:11.5px" onclick="event.stopPropagation();retrySend('${esc(pid)}')">↻ Ponów</button>
+                <button class="btn btn-ghost" style="padding:3px 9px;font-size:11.5px" onclick="event.stopPropagation();dismissSend('${esc(pid)}')">✓ Sprawdzone</button>` : ""}
+    </div>
+    ${hasDetail && open ? `<div style="margin-top:6px;font-size:11.5px;line-height:1.5">${detailHtml}</div>` : ""}
+  </div>`;
+}
+function toggleSend(pid) {
+  if (expandedSends.has(pid)) expandedSends.delete(pid); else expandedSends.add(pid);
+  renderSends();
+}
+function renderSends() {
+  const st = sendsData.stats || {};
+  if ($("sendsStats")) $("sendsStats").textContent =
+    `w kolejce: ${st.queued || 0} · w toku: ${st.running || 0} · zrobione: ${st.done || 0} · do przeglądu: ${st.problems || 0}`;
+  if ($("sendsFilters")) {
+    const segs = [["problems", "Do przeglądu"], ["errors", "Błędy"], ["ok", "OK"], ["all", "Wszystkie"]];
+    $("sendsFilters").innerHTML = segs.map(([k, l]) =>
+      `<button class="btn btn-ghost" style="padding:4px 12px;font-size:12px;${sendsFilter === k ? "border-color:var(--accent2);color:var(--accent2)" : ""}" onclick="setSendsFilter('${k}')">${l}</button>`).join("");
+  }
+  let items = (sendsData.items || []).slice();
+  if (sendsFilter === "problems") items = items.filter(_sendProblem);
+  else if (sendsFilter === "errors") items = items.filter(r => (r.ido && r.ido.status === "error") || (r.allegro && r.allegro.status === "error"));
+  else if (sendsFilter === "ok") items = items.filter(r => r.state === "done" && !_sendProblem(r));
+  const q = sendsSearch.trim().toLowerCase();
+  if (q) items = items.filter(r => String(r.product_id).includes(q) ||
+    String(r.model || "").toLowerCase().includes(q) ||
+    (r.allegro && (r.allegro.offers || []).some(o => String(o.id).includes(q))));
+  const root = $("sendsList");
+  if (root) root.innerHTML = items.length ? items.map(renderSendRow).join("")
+    : `<p style="color:var(--muted)">Brak pozycji w tym filtrze.</p>`;
+}
+function setSendsFilter(k) { sendsFilter = k; renderSends(); }
+async function retrySend(pid) { try { await api(`/api/sends/${pid}/retry`, { method: "POST" }); } catch {} fetchSends(); }
+async function dismissSend(pid) { try { await api(`/api/sends/${pid}/dismiss`, { method: "POST" }); } catch {} fetchSends(); }
 
 const STATUS = {
   queued: ["W kolejce", "queued"],
@@ -2049,12 +2129,12 @@ function renderIdoConfirm() {
 }
 
 async function executeIdoPlan() {
-  $("reallyGo").disabled = true; $("reallyGo").textContent = "Wykonywanie (backup + upload)...";
+  $("reallyGo").disabled = true; $("reallyGo").textContent = "Kolejkowanie...";
   let data;
-  try {
-    const res = await api(`/api/idosell/products/${planOfferId}/execute`, {
+  try {                                  // ASYNC: do kolejki tla (IdoSell -> Allegro), wraca od razu
+    const res = await api("/api/sends/enqueue", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: true }),
+      body: JSON.stringify({ product_ids: [planOfferId] }),
     });
     data = await res.json();
   } catch { data = { error: "Błąd połączenia" }; }
@@ -2063,23 +2143,12 @@ async function executeIdoPlan() {
     $("reallyGo").disabled = false; $("reallyGo").textContent = "📤 Wyślij do IdoSell";
     return;
   }
-  const v = data.verify || {};
-  const IC = { shop: "Lista", group: "Grupa", auction: "Bez tła" };
-  const iconsLine = (data.icons_set || []).length
-    ? `<p style="font-size:13px;margin-top:4px;color:${v.icons_ok === false ? "var(--err)" : "var(--ok)"}">
-        Ikony panelu (${data.icons_set.map(t => IC[t]).join(", ")}): ${v.icons_ok === false ? `⚠ brak: ${(v.icons_missing||[]).map(t => IC[t]).join(", ")}` : "✓ ustawione"}
-      </p>` : "";
   $("planBody").innerHTML = `
-    <p style="color:var(--ok);font-size:15px">✅ Wykonano: wgrano ${data.uploaded} obrobionych, galeria ma ${data.final_count} zdjęć.</p>
-    <p style="font-size:13px;margin-top:8px;color:${v.ok ? "var(--ok)" : "var(--err)"}">
-      Weryfikacja GET-em: ${v.ok ? `✓ zgodna (${v.count} zdjęć, sloty 1..${v.expected})` : `⚠ NIEZGODNA - w sklepie ${v.count} zdjęć, oczekiwano ${v.expected} (sloty: ${(v.slots||[]).join(",")})`}
-    </p>
-    ${iconsLine}
-    <p style="font-size:12.5px;color:var(--ok);margin-top:8px">🗄 Oryginały w pełnej rozdzielczości: ${data.archive && data.archive.dir ? esc(data.archive.dir) : "D:\\idosell_backup"}${data.archive && data.archive.already ? " (już były)" : ""}</p>
-    <p style="font-size:12.5px;color:var(--muted);margin-top:4px">Backup stanu sprzed zapisu: originals/idosell/${esc(planOfferId)}/ · dziennik: idosell_audit.jsonl</p>
-    <button class="btn btn-ghost" style="margin-top:14px" onclick="rollbackIdoPlan()">↩ Przywróć poprzednią galerię (rollback)</button>`;
-  loadIdoProducts(true);
-  offerAllegroPush([planOfferId]);
+    <p style="color:var(--ok);font-size:15px">✅ Zakolejkowano produkt ${esc(planOfferId)}.</p>
+    <p style="font-size:13px;color:var(--muted);margin-top:8px">Leci w tle: <b>IdoSell → Allegro</b> (backup + weryfikacja jak dotąd). Status na żywo w zakładce <b>Do sprawdzenia</b>. Możesz zamknąć i obrabiać dalej.</p>`;
+  $("reallyGo").classList.add("hidden");
+  fetchSends();                          // odswiez kolejke/badge; z "Ukryj wysłane" zniknie z obrobki
+  lastJobsKey = ""; render();
 }
 
 // zmiana akcji pojedynczego zdjecia w planie IdoSell (np. zle sklasyfikowane
@@ -2743,11 +2812,13 @@ async function loadIdoProducts(reset) {
   }
   let html = reset ? "" : $("idoProducts").innerHTML;
   const hideDone = $("idoHideDone").checked;
+  const hideSent = $("idoHideSent").checked;
   for (const p of data.products) {
     idoMeta[String(p.id)] = { code: p.code || null, executed: !!p.executed,
                               category: p.category || [], season: p.season || [],
                               series_id: p.series_id || null, series_name: p.series_name || "" };
-    if (hideDone && (p.processed || p.executed)) continue;  // ukryj obrobione/wyslane
+    if (hideDone && p.processed) continue;   // ukryj obrobione (lokalne wyniki)
+    if (hideSent && p.executed) continue;    // ukryj wyslane do IdoSell
     const checked = selectedIdo.has(String(p.id)) ? "checked" : "";
     html += `<div class="card">
       <div class="thumb white">${p.image ? `<img src="${esc(p.image)}" loading="lazy" decoding="async">` : `<span style="font-size:26px">🖼</span>`}
@@ -2777,6 +2848,7 @@ async function loadIdoProducts(reset) {
       </div></div>`;
   }
   $("idoProducts").innerHTML = html || `<div class="empty">Brak produktów</div>`;
+  const shownNow = $("idoProducts").querySelectorAll(".card").length;  // realne karty po filtrze (hideDone/hideSent)
   idoOffset += data.products.length;
   $("idoMoreBtn").classList.toggle("hidden", idoOffset >= data.total);
   // podsumowanie listy (np. po wejsciu w model/serie - czy caly zrobiony)
@@ -2786,11 +2858,13 @@ async function loadIdoProducts(reset) {
     ? `<span class="badge" style="color:var(--accent2)">📦 Model: ${esc(data.series_name || idoSeriesFilter.name)}</span>
        <a href="#" onclick="exitSeries();return false" style="margin-left:8px;color:var(--muted)">× pokaż wszystkie</a> &nbsp; `
     : "";
+  const filtered = (hideDone || hideSent);
   $("idoSummary").innerHTML = (chip || su)
     ? chip + (su
-        ? `Na liście: <b>${su.shown}</b> · obrobione <b style="color:var(--ok)">${su.processed}</b> · wysłane <b style="color:var(--ok)">${su.executed}</b>`
-          + (allDone ? ` · <b style="color:var(--ok)">✓ ${idoSeriesFilter ? "cały model" : "cała seria"} zrobiony</b>` : "")
-          + (data.total > su.shown ? ` <span style="opacity:.7">(widoczne ${su.shown} z ${data.total})</span>` : "")
+        ? `Na liście: <b>${shownNow}</b> · obrobione <b style="color:var(--ok)">${su.processed}</b> · wysłane <b style="color:var(--ok)">${su.executed}</b>`
+          + (filtered ? ` <span style="opacity:.7">(ukryto ${hideDone ? "obrobione" : ""}${hideDone && hideSent ? " + " : ""}${hideSent ? "wysłane" : ""})</span>` : "")
+          + (allDone && !filtered ? ` · <b style="color:var(--ok)">✓ ${idoSeriesFilter ? "cały model" : "cała seria"} zrobiony</b>` : "")
+          + (data.total > shownNow ? ` <span style="opacity:.7">(widoczne ${shownNow} z ${data.total})</span>` : "")
         : "")
     : "";
 }
@@ -2865,6 +2939,7 @@ $("idoAvail").addEventListener("change", () => loadIdoProducts(true));
 $("idoSeason").addEventListener("change", () => loadIdoProducts(true));
 $("idoCategory").addEventListener("change", () => loadIdoProducts(true));
 $("idoHideDone").addEventListener("change", () => loadIdoProducts(true));
+$("idoHideSent").addEventListener("change", () => loadIdoProducts(true));
 $("idoLimit").addEventListener("change", () => loadIdoProducts(true));
 $("idoSelectAll").addEventListener("click", () => {
   const cbs = document.querySelectorAll("#idoProducts .offer-check");
@@ -2876,7 +2951,8 @@ $("idoSelectAll").addEventListener("click", () => {
 async function selectAllMatching() {
   if (!confirm("Zaznaczyć WSZYSTKIE produkty pasujące do bieżącego filtra (wszystkie strony)? Przy dużej liczbie potrwa chwilę.")) return;
   const btn = $("idoSelectMatching"); const orig = btn.textContent; btn.disabled = true;
-  let offset = 0, total = null, guard = 0;
+  const hideDone = $("idoHideDone").checked, hideSent = $("idoHideSent").checked;
+  let offset = 0, total = null, guard = 0, skipped = 0;
   while (guard++ < 100) {              // bezpiecznik 100*100 = 10000
     const { endpoint, params } = idoQueryParams(offset, 100);
     let data;
@@ -2884,7 +2960,10 @@ async function selectAllMatching() {
     catch { break; }
     const prods = (data && data.products) || [];
     if (!prods.length) break;
-    for (const p of prods) selectedIdo.add(String(p.id));
+    for (const p of prods) {           // szanuj "ukryj obrobione/wysłane" - nie zaznaczaj ukrytych
+      if ((hideDone && p.processed) || (hideSent && p.executed)) { skipped++; continue; }
+      selectedIdo.add(String(p.id));
+    }
     total = data.total; offset += prods.length;
     btn.textContent = `Zaznaczam... ${selectedIdo.size}`;
     if (total != null && offset >= total) break;
@@ -2892,7 +2971,9 @@ async function selectAllMatching() {
   btn.disabled = false; btn.textContent = orig;
   toggleIdo("", false);          // odswiez liczniki przyciskow paczki
   loadIdoProducts(true);         // przerysuj strone z zaznaczeniami
-  alert(`Zaznaczono: ${selectedIdo.size} produktów.\nTeraz "⚡ bez wyboru" (obróbka) albo "Wyślij zaznaczone".`);
+  alert(`Zaznaczono: ${selectedIdo.size} produktów.`
+    + (skipped ? `\nPominięto ${skipped} (ukryte: ${[hideDone && "obrobione", hideSent && "wysłane"].filter(Boolean).join(" + ")}).` : "")
+    + `\nTeraz "⚡ bez wyboru" (obróbka) albo "Wyślij zaznaczone".`);
 }
 $("idoSelectMatching").addEventListener("click", selectAllMatching);
 $("idoSearchBtn").addEventListener("click", () => loadIdoProducts(true));
