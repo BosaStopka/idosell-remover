@@ -43,6 +43,7 @@ allegro_sends.json
 # stan workerow w tle + logi (feeder/watchdog/requeue) - dane runtime, nie do repo
 _monitor_state.json
 _summer_todo.json
+_pause_state.json
 *.log
 *.log.err
 # backupy stanu (siatka bezpieczenstwa persist_jobs) - lokalne, nie do repo

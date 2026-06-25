@@ -2,6 +2,8 @@
 """Czysta logika wyboru zadania dla workera - wydzielona z app.py, zeby byla
 testowalna bez importu app.py (app.py przy imporcie startuje watki/realne
 wysylki). Dziala na dowolnych obiektach Queue (queue.Queue)."""
+import json
+from pathlib import Path
 from queue import Empty
 
 
@@ -23,3 +25,21 @@ def next_job(priority_q, bulk_q, paused, timeout=1):
         return bulk_q.get(timeout=timeout)
     except Empty:
         return None
+
+
+def write_pause(path, paused):
+    """Utrwal stan recznej pauzy na dysk. Bez wyjatkow w gore (best-effort)."""
+    try:
+        Path(path).write_text(json.dumps({"paused": bool(paused)}),
+                              encoding="utf-8")
+    except OSError:
+        pass
+
+
+def read_pause(path) -> bool:
+    """Odczytaj utrwalony stan pauzy (domyslnie False: brak pliku/uszkodzony =
+    nie-pauza). Pozwala przezyc restart bez wznawiania bulku wbrew userowi."""
+    try:
+        return bool(json.loads(Path(path).read_text(encoding="utf-8")).get("paused"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False

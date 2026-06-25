@@ -46,6 +46,7 @@ EXTRAS_DIR = BASE / "extras"   # lokalne zdjecia dodane do produktow z dysku
 EXTRAS_DIR.mkdir(exist_ok=True)
 APP_CONFIG_FILE = BASE / "app_config.json"
 JOBS_STATE_FILE = BASE / "jobs_state.json"
+PAUSE_STATE_FILE = BASE / "_pause_state.json"   # utrwalona reczna pauza (przezywa restart)
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -443,7 +444,16 @@ def restore_jobs():
         print(f"Wznowiono {resumed} zadan z poprzedniej sesji")
 
 
+def restore_pause():
+    """Po restarcie przywroc reczna pauze (inaczej restart = wznowienie bulku
+    wbrew userowi). Stan utrwalany przy kazdym toggle w api_queue_pause."""
+    if queueing.read_pause(PAUSE_STATE_FILE):
+        process_paused.set()
+        print("Przywrocono reczna pauze obrobki z poprzedniej sesji")
+
+
 restore_jobs()
+restore_pause()
 threading.Thread(target=worker, daemon=True).start()
 
 
@@ -874,6 +884,7 @@ def api_queue_pause():
         process_paused.set()
     else:
         process_paused.clear()
+    queueing.write_pause(PAUSE_STATE_FILE, process_paused.is_set())   # przezyje restart
     return jsonify({"paused": process_paused.is_set()})
 
 

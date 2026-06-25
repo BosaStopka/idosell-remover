@@ -88,6 +88,24 @@ def test_queue_none_when_empty_not_paused():
     assert queueing.next_job(Queue(), Queue(), paused=False, timeout=0.05) is None
 
 
+# ---------- utrwalenie pauzy miedzy restartami (#3) ----------
+def test_pause_roundtrip(tmp_path):
+    import queueing
+    p = tmp_path / "_pause_state.json"
+    assert queueing.read_pause(p) is False        # brak pliku = nie-pauza
+    queueing.write_pause(p, True)
+    assert queueing.read_pause(p) is True          # utrwalona pauza przezywa "restart"
+    queueing.write_pause(p, False)
+    assert queueing.read_pause(p) is False
+
+
+def test_pause_read_corrupted_is_false(tmp_path):
+    import queueing
+    p = tmp_path / "_pause_state.json"
+    p.write_text("{nie-json", encoding="utf-8")
+    assert queueing.read_pause(p) is False          # uszkodzony plik = nie-pauza (bezpiecznie)
+
+
 # ---------- drip-feed feedera (feeder.*) ----------
 def test_feeder_should_feed_band():
     import feeder
