@@ -1072,11 +1072,14 @@ function replaceFile(jobId) {
 // "Obrob mimo to" - zdjecie wykryte (blednie) jako fashion: skasuj karte
 // zostawiona i dokolejkuj normalna obrobke (wytniecie tla). Plan dostaje
 // action=process, wiec wysylka pozniej nadpisze galerie obrobionym zdjeciem.
-async function processAnyway(pid, index) {
+// fullBleed=true -> od razu PELNY KADR (wytnij tlo + bez ramki w jednym
+// przebiegu), bez dwoch krokow (Obrob -> potem Bez ramki).
+async function processAnyway(pid, index, fullBleed) {
   if (index == null) { alert("Brak indeksu zdjęcia"); return; }
   const fd = optionsForm(new FormData());
   fd.append("index", index);
   fd.append("action", "process");
+  if (fullBleed) { fd.set("full_bleed", "true"); fd.set("crop_only", "false"); }
   let data;
   try {
     const res = await api(`/api/idosell/products/${pid}/photo-action`, { method: "POST", body: fd });
@@ -1852,7 +1855,8 @@ function render() {
           <div class="icon-toolbar">
             ${j.status === "queued" ? `<button class="icon-btn accent" onclick="toPriority('${j.id}', this)" title="Przetwórz teraz - przenieś z ogólnej kolejki na priorytet (ruszy od razu, mimo pauzy)" aria-label="Przetwórz teraz"><i class="ti ti-player-play"></i></button>` : ""}
             ${j.status === "done" ? `<a class="icon-btn" href="/done/${j.result}" download title="Pobierz JPG" aria-label="Pobierz JPG"><i class="ti ti-download"></i></a>` : ""}
-            ${j.kept ? `<button class="icon-btn accent" onclick="processAnyway('${esc(j.pid || pid)}', ${j.photo_index})" title="To NIE jest fashion - obrób mimo wszystko (wytnij tło)" aria-label="Obrób mimo to"><i class="ti ti-wand"></i></button>
+            ${j.kept ? `<button class="icon-btn accent" onclick="processAnyway('${esc(j.pid || pid)}', ${j.photo_index})" title="To NIE jest fashion - obrób mimo wszystko (wytnij tło, z ramką)" aria-label="Obrób mimo to"><i class="ti ti-wand"></i></button>
+              <button class="icon-btn accent" onclick="processAnyway('${esc(j.pid || pid)}', ${j.photo_index}, true)" title="Obrób bez ramki - wytnij tło i OD RAZU pełny kadr (jeden przebieg, bez klikania potem 'Bez ramki')" aria-label="Obrób bez ramki"><i class="ti ti-maximize"></i></button>
               ${j.orig ? `<button class="icon-btn" onclick="replaceUrl('${j.id}')" title="Podmień to zdjęcie fashion na lepszą wersję z linku. ZOSTAJE 1:1, bez wycinania tła." aria-label="Zamień (link)"><i class="ti ti-link"></i></button>
               <button class="icon-btn" onclick="replaceFile('${j.id}')" title="Podmień to zdjęcie fashion na lepszą wersję z dysku. ZOSTAJE 1:1, bez wycinania tła." aria-label="Zamień (dysk)"><i class="ti ti-folder"></i></button>` : ""}`
               : `${j.source === "idosell" && j.status === "done" && !j.orig && j.pid && j.photo_index != null ? `<button class="icon-btn accent" onclick="reprocessPhoto('${esc(j.pid)}', ${j.photo_index}, this)" title="Obrób to zdjęcie od nowa (pobiera źródło) - przywraca pełną edycję tego zdjęcia: Bez ramki, Podeszwa, edytor. Bez ruszania całego produktu." aria-label="Obrób to zdjęcie"><i class="ti ti-refresh"></i></button>` : ""}
