@@ -3417,7 +3417,23 @@ def _ido_execute_one(product_id: int) -> dict:
         verify = None
         attempt = 0
         for attempt in range(3):
-            idosell_client.put_product_images(product_id, images_b64)
+            try:
+                idosell_client.put_product_images(product_id, images_b64)
+            except idosell_client.IdoSellError as e:
+                # DEDUP (fault 99999 'Identical picture already exist'): istniejaca
+                # galeria ma identyczne zdjecia (re-push tych samych bajtow) -> IdoSell
+                # odrzuca duplikat. Fallback: czyscimy CALA galerie i wgrywamy na
+                # czysto. Backup zrobiony wyzej -> rollback dostepny; przy okazji
+                # naprawia numeracje slotow (czysta galeria => sloty 1..N).
+                if "Identical picture" not in str(e) and "99999" not in str(e):
+                    raise
+                cur_now = idosell_client.get_product_images(product_id)
+                ido_audit("execute_dedup_clean", product_id,
+                          {"cleared": [i["id"] for i in cur_now]})
+                idosell_client.delete_product_images(
+                    product_id, [i["id"] for i in cur_now])
+                idosell_client.put_product_images(product_id, images_b64)
+                leftover = []   # czysta galeria - brak nadmiarowych slotow do kasowania
             idosell_client.delete_product_images(product_id, leftover)
             if icons_b64:
                 idosell_client.set_product_icons(product_id, icons_b64)
