@@ -1830,6 +1830,7 @@ function render() {
             <button onclick="studioMove('${esc(j.pid)}',${j.photo_index},-1)" ${j.gallery_pos === 0 ? "disabled" : ""} title="Wcześniej w galerii">◀</button>
             <span title="Pozycja w galerii">${(j.gallery_pos ?? 0) + 1}/${j.gallery_len || 1}</span>
             <button onclick="studioMove('${esc(j.pid)}',${j.photo_index},1)" ${j.gallery_pos != null && j.gallery_pos >= (j.gallery_len - 1) ? "disabled" : ""} title="Później w galerii">▶</button>
+            <button onclick="studioToPos2('${esc(j.pid)}',${j.photo_index})" ${j.gallery_pos != null && j.gallery_pos <= 1 ? "disabled" : ""} title="Przesuń na 2. pozycję galerii (jednym kliknięciem)">↥2</button>
           </div>
           <div class="icon-row" title="Przypnij to zdjęcie do slotu IdoSell (jedno na typ)">
             <button class="${(j.icons || []).includes("shop") ? "on" : ""}" onclick="studioIconAll('${esc(j.pid)}',${j.photo_index})" title="Ustaw komplet ikon (Lista+Grupa+Bez tła) na tym zdjęciu">★ Lista</button>
@@ -2203,6 +2204,7 @@ async function openIdoPlan(productId) {
         <button onclick="idoPlanMove(${it.index},-1)" ${it.action === "delete" ? "disabled" : ""} title="Wcześniej w galerii">◀</button>
         <span title="Kolejność w galerii">${it.index}</span>
         <button onclick="idoPlanMove(${it.index},1)" ${it.action === "delete" ? "disabled" : ""} title="Później w galerii">▶</button>
+        <button onclick="idoPlanToPos2(${it.index})" ${it.action === "delete" ? "disabled" : ""} title="Na 2. pozycję galerii (jednym kliknięciem)">↥2</button>
       </div>
       <div class="seg">
         <button class="process ${it.action === "process" ? "on" : ""}" onclick="idoPhotoAction(${it.index}, 'process')" title="Wytnij tło (dokolejkuje tylko to zdjęcie)">Obrób</button>
@@ -2333,6 +2335,7 @@ async function idoPlanCurate(fields) {
   openIdoPlan(planOfferId);   // przerysuj z nowa kolejnoscia/ikonami
 }
 function idoPlanMove(index, dir) { idoPlanCurate({ op: "move", index, dir }); }
+function idoPlanToPos2(index) { idoPlanCurate({ op: "to_pos2", index }); }   // jednym klikiem na 2. pozycje
 function idoPlanIcon(index, type) { idoPlanCurate({ op: "icon", index, type }); }
 function idoPlanIconAll(index) { idoPlanCurate({ op: "icon_all", index }); }   // Lista -> komplet ikon
 
@@ -2349,6 +2352,7 @@ async function studioCurate(pid, fields) {
   lastJobsKey = ""; refresh();   // przerysuj kafelki ze swiezym stanem ikon/kolejnosci
 }
 function studioMove(pid, index, dir) { studioCurate(pid, { op: "move", index, dir }); }
+function studioToPos2(pid, index) { studioCurate(pid, { op: "to_pos2", index }); }   // jednym klikiem na 2. pozycje
 function studioIcon(pid, index, type) { studioCurate(pid, { op: "icon", index, type }); }
 function studioIconAll(pid, index) { studioCurate(pid, { op: "icon_all", index }); }   // Lista -> komplet ikon
 

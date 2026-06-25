@@ -2913,6 +2913,11 @@ def idosell_plan_curate(product_id):
         for d in decs:
             d["icons"] = []
         decs[pos]["icons"] = ["shop", "group", "auction"]
+    elif op == "to_pos2":
+        # Jednym klikiem na pozycje 2 galerii (zamiast wielokrotnego "<").
+        # Logika w gallery.move_to_pos2 (czysta, testowalna bez app.py).
+        gallery.move_to_pos2(decs, decs[pos]["index"],
+                             plan.get("gallery_order", "fashion_second"))
     else:
         return jsonify({"error": "Nieznana operacja"}), 400
     plan["decisions"] = decs

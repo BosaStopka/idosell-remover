@@ -57,6 +57,39 @@ def test_gallery_all_fashion_is_noop():
     assert [r["id"] for r in gallery.gallery_ordered(rows)] == [1, 2]
 
 
+def test_move_to_pos2_brings_photo_to_second():
+    import gallery
+    # 6 zdjec towaru (bez fashion), shop=lista na 1. Zdjecie idx=7 daleko -> na poz. 2.
+    rows = [{"index": i, "fashion": False, "icons": (["shop"] if i == 1 else [])}
+            for i in range(1, 8)]
+    gallery.move_to_pos2(rows, 7)
+    out = [d["index"] for d in gallery.gallery_ordered(rows)]
+    assert out[0] == 1 and out[1] == 7, f"7 ma byc na 2. pozycji, jest {out}"
+
+
+def test_move_to_pos2_stops_behind_fashion():
+    import gallery
+    # fashion trzyma poz. 2 (gallery_ordered) - zdjecie towaru laduje tuz za nim (poz. 3)
+    rows = [{"index": 1, "fashion": False, "icons": ["shop"]},
+            {"index": 2, "fashion": True, "icons": []},
+            {"index": 3, "fashion": False, "icons": []},
+            {"index": 4, "fashion": False, "icons": []}]
+    gallery.move_to_pos2(rows, 4)
+    out = [d["index"] for d in gallery.gallery_ordered(rows)]
+    assert out[0] == 1 and out[1] == 2, "fashion zostaje na poz. 2"
+    assert out[2] == 4, f"towar 4 laduje tuz za fashion (poz. 3), jest {out}"
+
+
+def test_move_to_pos2_idempotent_when_already_second():
+    import gallery
+    rows = [{"index": 1, "fashion": False, "icons": ["shop"]},
+            {"index": 2, "fashion": False, "icons": []},
+            {"index": 3, "fashion": False, "icons": []}]
+    before = [d["index"] for d in gallery.gallery_ordered(rows)]
+    gallery.move_to_pos2(rows, 2)   # juz na poz. 2 -> bez zmian
+    assert [d["index"] for d in gallery.gallery_ordered(rows)] == before
+
+
 # ---------- priorytet kolejki (queueing.next_job) ----------
 def test_queue_priority_first_even_when_paused():
     import queueing

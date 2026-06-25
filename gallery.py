@@ -33,3 +33,28 @@ def gallery_ordered(rows, mode="fashion_second"):
     # zdjecia TOWARU szly wczesniej. Wczesniej wszystkie lifestyle ladowaly na
     # 2,3,4... i spychaly zdjecia produktu dalej.
     return [lead] + fashion[:1] + nonfash + fashion[1:] + dels
+
+
+def _gallery_pos(rows, target_index, mode):
+    o = gallery_ordered(rows, mode)
+    return next((i for i, d in enumerate(o) if d.get("index") == target_index), None)
+
+
+def move_to_pos2(rows, target_index, mode="fashion_second"):
+    """Przesuwa zdjecie (po polu 'index' == target_index) na 2. pozycje galerii
+    (gallery_ordered index 1) jednym wywolaniem - krok po kroku w SUROWEJ
+    kolejnosci, az dojdzie do poz. 2 albo dalej sie nie da (np. fashion trzyma
+    poz. 2 - wtedy laduje tuz za nim). Replikuje reczne wielokrotne '<'.
+    Mutuje liste 'rows' i ja zwraca."""
+    for _ in range(len(rows) + 1):
+        gp = _gallery_pos(rows, target_index, mode)
+        if gp is None or gp <= 1:
+            break
+        cur = next((i for i, d in enumerate(rows) if d.get("index") == target_index), None)
+        if cur is None or cur == 0:
+            break
+        rows[cur - 1], rows[cur] = rows[cur], rows[cur - 1]
+        if (_gallery_pos(rows, target_index, mode) or 0) >= gp:
+            rows[cur - 1], rows[cur] = rows[cur], rows[cur - 1]   # re-sort cofnal -> wroc i stop
+            break
+    return rows
