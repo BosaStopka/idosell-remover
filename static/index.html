@@ -364,6 +364,14 @@
     position: absolute; top: 0; bottom: 0; width: 2px;
     background: var(--accent2); pointer-events: none; display: none;
   }
+  /* podglad pedzla - kolko pod kursorem pokazuje rozmiar/tryb ZANIM klikniesz */
+  #edCursor {
+    position: absolute; border-radius: 50%; pointer-events: none;
+    border: 1.5px solid var(--accent2);
+    box-shadow: 0 0 0 1.5px rgba(0,0,0,.55), inset 0 0 0 1.5px rgba(0,0,0,.35);
+    transform: translate(-50%, -50%); display: none; z-index: 4;
+  }
+  #edCursor.erase { border-color: var(--err); }
 </style>
 </head>
 <body>
@@ -419,6 +427,7 @@
       <img id="edBefore" draggable="false">
       <canvas id="edResult"></canvas>
       <div id="edSplitLine"></div>
+      <div id="edCursor"></div>
     </div>
   </div>
 </div>
@@ -2846,6 +2855,24 @@ function edStroke(from, to) {
   c.stroke();
 }
 
+// podglad pedzla: kolko pod kursorem o rozmiarze pedzla (w px ekranu, z zoomem)
+// i w kolorze trybu (przywracanie = akcent, usuwanie = czerwony). Pokazuje co
+// klikniecie obejmie ZANIM klikniesz.
+function edUpdateCursor(e) {
+  const cur = $("edCursor");
+  if (!cur || !ed.mask || ed.panning || ed.spaceDown
+      || $("edBrushTools").style.display === "none") { edHideCursor(); return; }
+  const sr = $("edStage").getBoundingClientRect();
+  const rect = $("edResult").getBoundingClientRect();
+  const scale = Math.min(rect.width / ed.mask.width, rect.height / ed.mask.height);
+  cur.style.width = cur.style.height = (ed.size * scale) + "px";   // srednica = lineWidth pedzla
+  cur.style.left = (e.clientX - sr.left) + "px";
+  cur.style.top = (e.clientY - sr.top) + "px";
+  cur.classList.toggle("erase", ed.mode === "erase");
+  cur.style.display = "block";
+}
+function edHideCursor() { const c = $("edCursor"); if (c) c.style.display = "none"; }
+
 function bindEditor() {
   const result = $("edResult");
   result.addEventListener("pointerdown", e => {
@@ -2870,8 +2897,10 @@ function bindEditor() {
       ed.panX = e.clientX - ed.panStart.x;
       ed.panY = e.clientY - ed.panStart.y;
       edApplyTransform();
+      edHideCursor();
       return;
     }
+    edUpdateCursor(e);   // podglad pedzla pod kursorem (tez gdy nie rysujesz)
     if (!ed.drawing) return;
     const p = edPos(e);
     edStroke(ed.last, p);
@@ -2882,6 +2911,7 @@ function bindEditor() {
     ed.drawing = false; ed.panning = false;
     $("edResult").style.cursor = ed.spaceDown ? "grab" : "crosshair";
   });
+  result.addEventListener("pointerleave", edHideCursor);   // poza obszarem - chowaj podglad pedzla
 
   // zoom kolkiem myszy DO KURSORA (origin = srodek sceny, ktory pokrywa sie ze
   // srodkiem obrazow); przy zoom>1 wymuszamy split=100, by clip-path nie kolidowal
