@@ -2694,11 +2694,13 @@ def _archived_images(product_id):
     return out or None
 
 
-def _ido_process_default(product_id: int, options: dict) -> dict:
+def _ido_process_default(product_id: int, options: dict, priority: bool = False) -> dict:
     """Obrobka wsadowa produktu domyslnym planem: zdjecia 'Obrob' (fashion ->
     'keep'), zdjecie #1 -> ikona Listy + Grupy. ZRODLO = trwale archiwum
     ORYGINALOW (nie aktualny IdoSell - po wysylce to obrobione!). Dograne
-    recznie zdjecia (extras) z poprzedniego planu sa ZACHOWANE. Zwraca {ok,...}."""
+    recznie zdjecia (extras) z poprzedniego planu sa ZACHOWANE. Zwraca {ok,...}.
+    priority=True (pojedynczy reprocess z UI 'Obrob jeszcze raz') -> priority_queue
+    (leci od razu, tez przy pauzie); False (masowka/feeder/requeue) -> bulk."""
     archive_originals(product_id)   # idempotent: pierwszy zrzut = prawdziwe oryginaly
     # zachowaj dograne recznie zdjecia (extras) z poprzedniego planu - reprocess
     # ma je przepuscic ponownie, nie wyrzucic
@@ -2749,7 +2751,7 @@ def _ido_process_default(product_id: int, options: dict) -> dict:
         if action == "process" and data:
             jid = submit_job(f"{product_id}_{i + 1}.jpg", data,
                              {**options, "mirror": False}, source="idosell",
-                             priority=False)   # BULK (masowka/feeder) -> wstrzymywany pauza
+                             priority=priority)   # reprocess z UI -> priorytet; masowka -> bulk
             dup_entries.append((jid, i + 1, data))
             jobs_made += 1
         elif action == "keep" and data:
@@ -2802,6 +2804,10 @@ def idosell_bulk_process():
     """Masowa obrobka wielu produktow naraz (domyslny plan per produkt).
     Body form: product_ids (JSON lista) + opcje obrobki."""
     options = parse_options(request.form)
+    # priority=1 ustawia "Obrob jeszcze raz" (reprocess jednego produktu z UI) -
+    # akcja interaktywna -> priority_queue (leci od razu, tez przy pauzie).
+    # Masowka/feeder/requeue nie wysylaja tej flagi -> bulk (wstrzymywany pauza).
+    priority = bool(request.form.get("priority"))
     try:
         ids = [int(x) for x in json.loads(request.form.get("product_ids", "[]"))]
     except (json.JSONDecodeError, ValueError):
@@ -2810,7 +2816,7 @@ def idosell_bulk_process():
         return jsonify({"error": "Pusta lista produktow"}), 400
     results, total_jobs = [], 0
     for pid in ids:
-        r = _ido_process_default(pid, options)
+        r = _ido_process_default(pid, options, priority=priority)
         total_jobs += r["jobs"]
         results.append({"id": pid, **r})
     ok = sum(1 for r in results if r["ok"])
@@ -2839,6 +2845,10 @@ def idosell_photo_action(product_id):
     dec["action"] = action
     if action == "delete":
         dec["icons"] = []   # usuniete zdjecie nie moze byc ikona
+    elif action == "process":
+        # "Obrob mimo to": skoro wycinamy tlo, to JUZ NIE fashion - zwolnij slot
+        # fashion w galerii (gallery_ordered) i pozwol przesuwac jak zwykle zdjecie
+        dec["fashion"] = False
     pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
                   encoding="utf-8")
     _remove_product_job(product_id, idx)   # skasuj stara karte tego zdjecia

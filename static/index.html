@@ -1129,6 +1129,7 @@ async function reprocessProduct(pid) {
   if (!confirm("Obrobić ten produkt jeszcze raz od nowa?\n\nSkasuje obecne karty i plan tego produktu, po czym przetworzy wszystkie zdjęcia ponownie z aktualnymi ustawieniami (fashion zostanie wykryte i zostawione).")) return;
   const fd = optionsForm(new FormData());
   fd.append("product_ids", JSON.stringify([Number(pid)]));
+  fd.append("priority", "1");   // reprocess jednego produktu = interaktywne -> kolejka priorytetowa (leci mimo pauzy)
   let data;
   try {
     const res = await api("/api/idosell/bulk-process", { method: "POST", body: fd });
