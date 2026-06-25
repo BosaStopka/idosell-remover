@@ -43,6 +43,8 @@ def test_ui_braces_parens_balanced():
     "function render(", "async function refresh(", "function studioJobsUrl(",
     "function toggleStudioAll(", "async function smoothSole(",
     "async function fullBleedFromMask(", "async function importAffenzahn(",
+    "async function reprocessPhoto(", "async function toPriority(",
+    "function studioToPos2(",
 ])
 def test_ui_key_functions_present(fn):
     assert fn in _js(), f"brak funkcji UI: {fn}"
@@ -154,7 +156,7 @@ def test_jobs_light_subset_of_all(server):
                for j in light), "light nie powinien zawierac idosell+done"
 
 
-@pytest.mark.parametrize("ep", ["smooth-sole", "fullbleed-mask"])
+@pytest.mark.parametrize("ep", ["smooth-sole", "fullbleed-mask", "to-priority"])
 def test_new_job_endpoints_registered(server, ep):
     r = server.post(f"{API}/api/jobs/__nope__/{ep}",
                     cookies={"bs_auth_ido": _cookie()}, timeout=8)

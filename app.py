@@ -342,7 +342,10 @@ def worker():
         low_ram_pause.clear()
         with lock:
             job = jobs.get(job_id)
-            if job is None:
+            # pomin jesli zadanie zniknelo, zostalo anulowane LUB juz obrobione -
+            # m.in. duplikat w bulk queue po "przenies na priorytet" (to-priority):
+            # priorytet obrobi je pierwszy, a staly wpis w bulku tu wypada.
+            if job is None or job.get("status") != "queued":
                 continue
             job["status"] = "processing"
         persist_jobs()
@@ -664,6 +667,21 @@ def api_retry(job_id):
     priority_queue.put(job_id)   # Ponow = interaktywne -> priorytet (tez przy pauzie)
     persist_jobs()
     return jsonify({"job": job_id})
+
+
+@app.post("/api/jobs/<job_id>/to-priority")
+def api_to_priority(job_id):
+    """Przenosi zadanie 'queued' z ogolnej kolejki (bulk) na PRIORYTET - ruszy
+    od razu, tez przy pauzie. Stary wpis w bulk queue zostaje, ale worker go
+    pominie (guard: status != queued). Tylko dla zadan w kolejce."""
+    with lock:
+        job = jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Nie ma takiego zadania"}), 404
+        if job.get("status") != "queued":
+            return jsonify({"error": "Zadanie nie jest w kolejce"}), 409
+    priority_queue.put(job_id)
+    return jsonify({"ok": True})
 
 
 @app.post("/api/jobs/<job_id>/flip")

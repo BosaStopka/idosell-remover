@@ -1096,6 +1096,18 @@ async function reprocessPhoto(pid, index, el) {
   } catch { alert("Błąd połączenia"); unbusy(el); }
 }
 
+// "Przetwórz teraz": przenosi zadanie z ogólnej kolejki (bulk) na priorytet -
+// ruszy od razu, też przy pauzie. Pokazywane TYLKO na zadaniach "W kolejce".
+async function toPriority(jobId, el) {
+  busy(el);
+  try {
+    const res = await api(`/api/jobs/${jobId}/to-priority`, { method: "POST" });
+    const data = await res.json();
+    if (data.error) { alert(data.error); unbusy(el); return; }
+    lastJobsKey = ""; startPolling();
+  } catch { alert("Błąd połączenia"); unbusy(el); }
+}
+
 // dodanie brakujacego zdjecia do produktu z LINKU (internet): pobierz, obrob,
 // dodaj na koniec galerii. Do uzupelniania produktow ktore maja za malo zdjec.
 async function addPhotoUrl(pid) {
@@ -1829,6 +1841,7 @@ function render() {
             ${j.dup ? `<span class="badge" style="color:var(--err);border:1px solid var(--err)" title="Duplikat zdjęcia #${j.dup_keep}, które ma wyższą rozdzielczość. Nominowane do usunięcia - kliknij 🗑 Usuń (albo zostaw, jeśli to nie duplikat).">🔁 duplikat → usuń?</span>` : ""}
           </div>
           <div class="icon-toolbar">
+            ${j.status === "queued" ? `<button class="icon-btn accent" onclick="toPriority('${j.id}', this)" title="Przetwórz teraz - przenieś z ogólnej kolejki na priorytet (ruszy od razu, mimo pauzy)" aria-label="Przetwórz teraz"><i class="ti ti-player-play"></i></button>` : ""}
             ${j.status === "done" ? `<a class="icon-btn" href="/done/${j.result}" download title="Pobierz JPG" aria-label="Pobierz JPG"><i class="ti ti-download"></i></a>` : ""}
             ${j.kept ? `<button class="icon-btn accent" onclick="processAnyway('${esc(j.pid || pid)}', ${j.photo_index})" title="To NIE jest fashion - obrób mimo wszystko (wytnij tło)" aria-label="Obrób mimo to"><i class="ti ti-wand"></i></button>
               ${j.orig ? `<button class="icon-btn" onclick="replaceUrl('${j.id}')" title="Podmień to zdjęcie fashion na lepszą wersję z linku. ZOSTAJE 1:1, bez wycinania tła." aria-label="Zamień (link)"><i class="ti ti-link"></i></button>
