@@ -394,7 +394,7 @@
   </div>
 </div>
 
-<input type="file" id="idoPlanAddInput" accept="image/*" hidden>
+<input type="file" id="idoPlanAddInput" accept="image/*" multiple hidden>
 <div class="overlay hidden" id="planOverlay">
   <div class="panel modal-box">
     <h2 id="planTitle">Wykonanie planu na Allegro</h2>
@@ -1047,6 +1047,36 @@ async function addPhotoUrl(pid) {
   if (data.error) { alert(data.error); return; }
   lastJobsKey = "";
   startPolling();   // nowe zdjecie (${data.w}x${data.h}) w obrobce
+}
+
+// dodanie zdjecia z DYSKU do produktu: upload -> extras (add-local) -> dopnij do
+// planu jako process (plan-add). Jak addPhotoUrl, ale zrodlo z pliku - dla
+// produktow ze zbyt malym/slabym zrodlem, gdy mamy lepsze zdjecie na dysku.
+function addPhotoFile(pid) {
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = "image/*"; inp.multiple = true;
+  inp.onchange = async () => {
+    const files = [...(inp.files || [])];
+    if (!files.length) return;
+    let added = 0; const errs = [];
+    // SEKWENCYJNIE - kazdy plan-add liczy nowy index z aktualnego planu, wiec
+    // rownolegle pobiloby indeksy. Kazdy plik: upload -> dopnij do planu (obrobi sie).
+    for (const f of files) {
+      const fd = new FormData(); fd.append("file", f);
+      try {
+        const add = await (await api(`/api/idosell/products/${pid}/add-local`, { method: "POST", body: fd })).json();
+        if (add.error) { errs.push(`${f.name}: ${add.error}`); continue; }
+        const fd2 = optionsForm(new FormData()); fd2.append("extra", add.extra);
+        const res = await (await api(`/api/idosell/products/${pid}/plan-add`, { method: "POST", body: fd2 })).json();
+        if (res.error) { errs.push(`${f.name}: ${res.error}`); continue; }
+        added++;
+      } catch { errs.push(`${f.name}: błąd połączenia`); }
+    }
+    if (errs.length) alert(`Dodano ${added}/${files.length} zdjęć.\nProblemy:\n${errs.join("\n")}`);
+    lastJobsKey = "";
+    startPolling();   // dodane zdjecia z dysku -> w obrobce, laduja na koncu galerii
+  };
+  inp.click();
 }
 
 // ponowna obrobka CALEGO produktu od nowa (aktualne ustawienia): reset starych
