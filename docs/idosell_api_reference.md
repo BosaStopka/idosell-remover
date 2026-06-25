@@ -28,6 +28,9 @@ Szczegółowe docsy w tym repo (uzupełniają, nie zastępują):
 7. Zapis zdjęć: POMIJAJ `shopId` żeby pisać GLOBALNIE; podanie shopId tworzy
    osobny zestaw per-sklep (zakładka w panelu).
 8. Ikon NIE wysyłaj w tym samym PUT co galerię - znikną. Osobny PUT PO galerii.
+9. Ceny per rozmiar: zapis `PUT /products/products` przez tablicę **`productSizes`** (nie `productSizesAttributes`), `priceChangeMode:"amount_set"`, `settingModificationType:"edit"`; podanie jednego rozmiaru edytuje tylko jego. Szczegóły i mapa pól: sekcja 11.
+10. `faults:[]` w odpowiedzi zapisu NIE gwarantuje, że pola weszły (POS = wymuszona detaliczna, sugerowana = poziom produktu) - ZAWSZE weryfikuj GET-em.
+11. `0` w polu ceny = "nie zmieniaj", NIE "ustaw zero" (wyjątek: przekreślona detaliczna = 0 czyści). Minimalnej/sugerowanej nie wyczyścisz przez API wysyłając 0. Ceny zapisuj REST-em, nie webowym importem (ten generuje błędne `shopsMask:0`).
 
 ---
 
@@ -268,3 +271,92 @@ Każda strona ma wersję markdown z pełnym OpenAPI: dopisz `.md` do URL, np.
 `https://idosell.readme.io/reference/productsimagesput.md`.
 Indeks wszystkich stron: `https://idosell.readme.io/llms.txt`.
 (Zwykły fetch bywa blokowany - działa przez przeglądarkę / z User-Agent.)
+
+---
+
+## 11. Ceny - odczyt i zapis per rozmiar (zweryfikowane empirycznie 2026-06-18 na prod. 4278/8423)
+
+Kontekst konta: 1 sklep (shopId 1), rozmiary = warianty wewnątrz produktu, ceny różne per rozmiar.
+
+### 11.1. Odczyt - `GET /products/products?productIds=N` (query string!)
+Zwraca pełny produkt; ceny w 3 miejscach:
+- **top-level** `productRetailPrice` / `...Wholesale` / `...Minimal` / `...AutomaticCalculation` / `...Pos` / `productStrikethroughRetailPrice` / `...Wholesale` + `productSuggestedPrice` = wiersz "Wszystkie". Przy aktywnych cenach per rozmiar jest **POCHODNĄ rozmiarów** (np. retail = najniższy rozmiar) - NIE ustawia się go wprost (wartości wysłane na top-level są ignorowane, oprócz suggested).
+- **`productSizesAttributes[]`** = warstwa per rozmiar (globalna): te same pola cenowe per size. Rozmiar dziedziczący cenę domyślną może nie mieć wpisu cenowego (tylko waga).
+- **`productShopsAttributes[]`** = per sklep: ceny produktowe + `productPricesConfig` + `productSuggestedPrice` + `productShopSizesAttributes[]` (per sklep per rozmiar).
+- `shopsMask` na produkcie = **1** (1 sklep). To POPRAWNE na REST. `shopsMask:0` z webowego importu (panel PIM > Import/aktualizacja) to BUG narzędzia BETA - przez webowy import ceny per rozmiar NIE zapisują się. **Ceny zapisuj przez REST, nie przez webowy import.**
+
+### 11.2. Zapis per rozmiar - `PUT /products/products`
+```json
+{"params":{"settings":{"settingModificationType":"edit"},
+ "products":[{"productId":4278,"priceChangeMode":"amount_set",
+   "productSizes":[{"sizeId":"52","sizePanelName":"S",
+     "productRetailPrice":89.90,"productStrikethroughRetailPrice":119.90}]}]}}
+```
+- Klucz zapisu: **`productSizes`** (NIE `productSizesAttributes` - to nazwa z odczytu). Rozmiar po `sizeId` (+`sizePanelName`). Produkt po `productId`/`productIndex`/codeExtern/codeProducer.
+- `priceChangeMode`: `amount_set` | `amount_diff` | `percent_diff`.
+- **CHIRURGICZNY**: podanie jednego rozmiaru zmienia TYLKO ten rozmiar (reszta nietknięta). Zmiana per-size propaguje do warstwy per-sklep automatycznie.
+
+### 11.3. Mapa pól (co działa per rozmiar)
+Settable per rozmiar (w `productSizes[]`):
+- `productRetailPrice` (Detaliczna)
+- `productWholesalePrice` (Hurtowa) - jej ustawienie przełącza `productPricesConfig` na `wholesale_notequals_retail`
+- `productMinimalPrice` (Minimalna)
+- `productAutomaticCalculationPrice` (Do obliczeń automatycznych - używane pod Allegro)
+- `productStrikethroughRetailPrice` (Przekreślona detaliczna) - AKTYWUJE się samą wartością >0 (brak osobnej flagi mimo toggla "Przekreślona" w panelu); =0 czyści przecenę
+- `productStrikethroughWholesalePrice` (Przekreślona hurtowa)
+
+NIE per rozmiar:
+- `productPosPrice` (POS/stacjonarna) - wymuszona = detaliczna (`pos_equals_retail`); inna wartość ignorowana, ląduje = retail
+- `productSuggestedPrice` (Sugerowana) - poziom produktu/sklepu (nie ma w productSizesAttributes); ustaw w obiekcie produktu, propaguje do per-sklep dla wszystkich rozmiarów
+
+### 11.4. PUŁAPKI ZAPISU (krytyczne, zweryfikowane)
+- **`faults: []` ≠ "zapisało się to, co chciałem".** POS/suggested mają własne reguły i bywają ignorowane mimo pustych faults. ZAWSZE weryfikuj GET-em po zapisie i porównuj z zamiarem.
+- **`0` = "nie zmieniaj", NIE "ustaw zero"** dla większości pól cenowych: wysłanie `productWholesalePrice`/`productMinimalPrice`/`productSuggestedPrice` = 0 NIE wyzeruje pola (zostaje poprzednia wartość). WYJĄTEK: `productStrikethroughRetailPrice` = 0 czyści przekreśloną. Konsekwencja: minimalnej i sugerowanej NIE da się wyczyścić przez API wysyłając 0 - trzeba panelu albo innego mechanizmu (do ustalenia). Rollback buduj z NIEZEROWYCH oryginalnych wartości.
+- **Hurtowa rządzona przez `productPricesConfig`**: ustawienie hurtowej przełącza na `wholesale_notequals_retail`; aby wrócić do "hurtowa=detaliczna" wyślij `productShopsAttributes:[{"shopId":1,"productPricesConfig":"wholesale_equals_retail"}]` (hurtowa zacznie podążać za detaliczną).
+- VAT: net = brutto/1.23 (2 miejsca). Pola `*Net` można podać lub zostawić systemowi.
+- Omnibus (najniższa cena 30 dni) IdoSell śledzi automatycznie (węzeł `omnibus_price_retail` w eksporcie IOF).
+
+### 11.5. Wzorzec bezpiecznego zapisu cen (OBOWIĄZKOWY, jak sekcja 8)
+1. Backup pełnego GET produktu PRZED zapisem (lokalnie, per produkt).
+2. PUT (`productSizes[]`).
+3. Weryfikacja GET PO - porównaj KAŻDE pole z zamiarem (nie ufaj `faults`).
+4. Rollback 1:1 z backupu - PUT oryginalnych (NIEZEROWYCH) wartości per rozmiar + ewentualnie `productPricesConfig`. Pamiętaj o pkt 11.4 (0 nie czyści).
+5. Pierwszy test/rozwój: produkt z tagiem Archiwum (param 993 = wartość 2386) ORAZ **zerowym stanem**. UWAGA: sam tag Archiwum NIE ukrywa ze sklepu (`productIsVisible:y`, `avail_mgmt:stock`) - dopiero 0 szt. = niekupowalny = bezpieczny cel.
+
+---
+
+## 12. Flagi handlowe, menu, kategoria - proces outletowy (PUT /products/products, zweryfikowane 2026-06-18 na 4278/7047)
+
+Tagi (parametr 993 "Product Tag" / eng "Outlet"): wartość **994 = "Outlet"**, **2386 = "Archiwum"**, 2412 = "Buty". Filtr produktów outletu: `productParameterIdsEnabled:[994]`.
+
+### 12.1. Produkt wyróżniony/specjalny/promocja/przecena -> `productHotspotsZones` (per sklep)
+```json
+"productHotspotsZones":[{"productHotspotIsEnabled":true,"shopId":1,
+  "productIsDistinguished":true,   // "Produkt wyróżniony"
+  "productIsSpecial":false,        // "Produkt specjalny"
+  "productIsPromotion":false,      // "Promocja"
+  "productIsDiscount":false}]      // "Przecena"
+```
+UWAGA: top-level `productDistinguished`/`productSpecial` (z `promoteItemEnabled`) to CO INNEGO - liczy się `productHotspotsZones[].productIsDistinguished`. Panel: Marketing i SEO > Rabaty i promocje.
+
+### 12.2. Przypisanie do menu (np. węzeł Outlet) -> `productMenuItems`
+```json
+"productMenuItems":[{"shopId":1,"menuId":1,
+  "productMenuOperation":"add_product",
+  "menuItemTextId":"Outlet\\Buty dziecięce"}]
+```
+- Operacje ZWERYFIKOWANE: **`add_product`** (dodaj do węzła), **`delete_product`** (usuń z węzła). Inne wartości (`delete`/`remove`/`remove_product`) są CICHO IGNOROWANE (faults:[], brak zmiany) - klasyczny wzorzec "nieznana wartość = no-op".
+- Adresowanie po **`menuItemTextId`** (ścieżka tekstowa, np. `"Outlet\\Buty dziecięce"`) - NIE trzeba numerycznego ID. Chirurgiczne: rusza tylko wskazany węzeł, reszta przypisań produktu nietknięta.
+- Odczyt obecnych przypisań: `productMenu[]` (menuItemId + menuItemDescriptionsLangData.menuItemTextId per lang).
+- Priorytet w węźle: `productPriorityInMenuNodes` (numeryczny `productMenuNodeId` + `productPriority` + `productMenuTreeId`).
+- Węzły Outlet (sklep 1): `"Outlet\\Buty dziecięce"` (=menuItemId 255, potwierdzony); wg panelu też Buty damskie/męskie, Kalosze, Kapcie, Sandały (dokładne textId do potwierdzenia per typ - czytaj `productMenu` produktu już tam przypisanego).
+- Endpoint drzewa menu: `GET /menu/menu` istnieje, ale param sklepu do dobicia (shopId=1 zwracał faultCode 2 "Sklep nie istnieje"). Do samego przypisania NIEPOTRZEBNY - wystarczy `menuItemTextId`.
+
+### 12.3. Kategoria -> `categoryId` / `categoryIdoSellId`
+```json
+"categoryId": 1214553949,        // kategoria własna
+"categoryIdoSellId": 5962        // taksonomia IdoSell
+```
+
+### 12.4. Cały proces outletowy = JEDEN PUT /products/products
+cena detaliczna + przekreślona (`productSizes[]`) + wyróżniony (`productHotspotsZones`) + menu Outlet (`productMenuItems`) + kategoria (`categoryId`) można złożyć w jedno wywołanie per produkt. Zawsze: backup -> PUT -> weryfikacja GET (nie ufaj faults) -> rollback gotowy.

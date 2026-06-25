@@ -3,6 +3,16 @@
 Projekt to kopia bg-remover przerabiana pod IdoSell. Modul Allegro
 zostal w kodzie tymczasowo (nieaktywny bez configow) - docelowo do wyciecia.
 
+## Integracja Allegro <-> sklep (wspolny plik z bg-remover)
+Przy zadaniach dot. wypychania zdjec TEZ na Allegro przy pushu na sklep:
+NA POCZATKU przeczytaj i aktualizuj wspolny plik
+`C:\Users\Dell\WSPOLPRACA_allegro.md` (kontrakt API + skrzynka + dziennik,
+dzielone z bg-remover). **Architektura: idosell WOLA bg-remover (HTTP, port
+5000) - NIE robi Allegro sam** (lokalny modul Allegro zostaje nieaktywny).
+W skrzynce jest prosba `-> dla [ido]` o Twoja opinie na temat kontraktu -
+odpowiedz wpisem `[ido]` w tym pliku. Pelna instrukcja:
+`C:\Users\Dell\INSTRUKCJA_ALLEGRO_PUSH_idosell.md`.
+
 ## Zasady pracy
 
 1. **Pytaj przed zmianami** - najpierw propozycja i akceptacja, potem edycja.
@@ -13,12 +23,22 @@ zostal w kodzie tymczasowo (nieaktywny bez configow) - docelowo do wyciecia.
    potwierdzenie w aplikacji (podglad payloadu + checkbox + przycisk).
    Przed kazdym zapisem: fizyczny backup aktualnych zdjec na dysk
    (originals/idosell/{productId}/), po zapisie: weryfikacja GET-em.
-3. **Testuj przed oddaniem** - po kazdej zmianie serwera: restart + testy
-   curl (bramka PIN 401/403, endpointy, happy path). Po zmianie pipeline:
-   sample na zdjeciach z input/. Pierwszy zapis do IdoSell wylacznie na
-   produkcie testowym/ukrytym.
+3. **Testuj przed oddaniem** - od 2026-06-25 jest pytest:
+   **`python -m pytest tests/`** uruchamiac PRZED oddaniem kazdej zmiany
+   (lapie m.in. bilans backtickow/klamr JS = czarne tlo, filtry /api/jobs,
+   rejestracje endpointow, czyste funkcje pipeline/affenzahn). Po zmianie
+   serwera: restart + testy. Po zmianie pipeline: sample na zdjeciach z
+   input/. Pierwszy zapis do IdoSell wylacznie na produkcie testowym/ukrytym.
 4. **Interpunkcja** - zwykly myslnik `-`, nigdy polpauza/pauza (globalna
    zasada uzytkownika).
+5. **UI jak profesjonalny designer** - kazda zmiana UI (static/index.html)
+   ma byc zrobiona jak profesjonalny designer UI/UX i SPOJNA z reszta apki:
+   ten sam dark theme i tokeny (--accent #7c6cff, --accent2 #19e3d6, --radius,
+   Segoe UI), jednolity zestaw ikon (Tabler), spojna hierarchia (primary vs
+   ghost), odstepy i wzorce komponentow. Przy wiekszych przeprojektowaniach
+   najpierw makieta do akceptacji. Po edycji index.html walidacja bilansu
+   backtickow/klamr (hot-path render moze zblankowac strone). Spojnosc >
+   pospiech.
 
 ## Wzorzec bezpieczenstwa zapisu (OBOWIAZKOWY)
 
