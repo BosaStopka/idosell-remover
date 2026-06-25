@@ -1746,7 +1746,7 @@ function render() {
             <button onclick="studioMove('${esc(j.pid)}',${j.photo_index},1)" ${j.gallery_pos != null && j.gallery_pos >= (j.gallery_len - 1) ? "disabled" : ""} title="Później w galerii">▶</button>
           </div>
           <div class="icon-row" title="Przypnij to zdjęcie do slotu IdoSell (jedno na typ)">
-            <button class="${(j.icons || []).includes("shop") ? "on" : ""}" onclick="studioIcon('${esc(j.pid)}',${j.photo_index},'shop')" title="Główna miniaturka (lista towarów)">★ Lista</button>
+            <button class="${(j.icons || []).includes("shop") ? "on" : ""}" onclick="studioIconAll('${esc(j.pid)}',${j.photo_index})" title="Ustaw komplet ikon (Lista+Grupa+Bez tła) na tym zdjęciu">★ Lista</button>
             <button class="${(j.icons || []).includes("group") ? "on" : ""}" onclick="studioIcon('${esc(j.pid)}',${j.photo_index},'group')">Grupa</button>
             <button class="${(j.icons || []).includes("auction") ? "on" : ""}" onclick="studioIcon('${esc(j.pid)}',${j.photo_index},'auction')">Bez tła</button>
           </div>` : ""}
@@ -1934,7 +1934,7 @@ function renderPick() {
       </div>
       ${pickState.source === "idosell" ? `<button class="mir-toggle ${it.mirror ? "on" : ""}" onclick="toggleMirror(${i})" title="Odbij lustrzanie (standaryzacja kierunku noska)">⇄ Odbij lustrzanie${it.mirror ? " ✓" : ""}</button>` : ""}
       ${pickState.source === "idosell" ? `<div class="icon-row" title="Przypnij zdjęcie do slotu panelu IdoSell">
-        <button class="${(it.icons || []).includes("shop") ? "on" : ""}" onclick="toggleIcon(${i},'shop')">Lista</button>
+        <button class="${(it.icons || []).includes("shop") ? "on" : ""}" onclick="toggleIconAll(${i})">Lista</button>
         <button class="${(it.icons || []).includes("group") ? "on" : ""}" onclick="toggleIcon(${i},'group')">Grupa</button>
         <button class="${(it.icons || []).includes("auction") ? "on" : ""}" onclick="toggleIcon(${i},'auction')">Bez tła</button>
       </div>` : ""}
@@ -1966,6 +1966,13 @@ function toggleIcon(i, t) {
   const had = (items[i].icons || []).includes(t);
   for (const x of items) x.icons = (x.icons || []).filter(y => y !== t);
   if (!had) items[i].icons.push(t);
+  renderPick();
+}
+function toggleIconAll(i) {   // Lista -> komplet ikon (Lista+Grupa+Bez tła) na tym zdjeciu
+  const items = pickState.items;
+  if (items[i].action === "delete") { alert("Zdjęcie oznaczone do usunięcia nie może być ikoną"); return; }
+  for (const x of items) x.icons = [];
+  items[i].icons = ["shop", "group", "auction"];
   renderPick();
 }
 function movePick(i, d) {
@@ -2117,7 +2124,7 @@ async function openIdoPlan(productId) {
         <button class="delete ${it.action === "delete" ? "on" : ""}" onclick="idoPhotoAction(${it.index}, 'delete')">Usuń</button>
       </div>
       <div class="icon-row" title="Przypnij zdjęcie do slotu panelu IdoSell (jedno na typ)">
-        <button class="${(it.icons || []).includes("shop") ? "on" : ""}" ${it.action === "delete" ? "disabled" : ""} onclick="idoPlanIcon(${it.index},'shop')">Lista</button>
+        <button class="${(it.icons || []).includes("shop") ? "on" : ""}" ${it.action === "delete" ? "disabled" : ""} onclick="idoPlanIconAll(${it.index})">Lista</button>
         <button class="${(it.icons || []).includes("group") ? "on" : ""}" ${it.action === "delete" ? "disabled" : ""} onclick="idoPlanIcon(${it.index},'group')">Grupa</button>
         <button class="${(it.icons || []).includes("auction") ? "on" : ""}" ${it.action === "delete" ? "disabled" : ""} onclick="idoPlanIcon(${it.index},'auction')">Bez tła</button>
       </div></div>`;
@@ -2241,6 +2248,7 @@ async function idoPlanCurate(fields) {
 }
 function idoPlanMove(index, dir) { idoPlanCurate({ op: "move", index, dir }); }
 function idoPlanIcon(index, type) { idoPlanCurate({ op: "icon", index, type }); }
+function idoPlanIconAll(index) { idoPlanCurate({ op: "icon_all", index }); }   // Lista -> komplet ikon
 
 // kuracja PROSTO ze Studio (kafelek) - ten sam endpoint co w planie, odswieza zadania
 async function studioCurate(pid, fields) {
@@ -2256,25 +2264,29 @@ async function studioCurate(pid, fields) {
 }
 function studioMove(pid, index, dir) { studioCurate(pid, { op: "move", index, dir }); }
 function studioIcon(pid, index, type) { studioCurate(pid, { op: "icon", index, type }); }
+function studioIconAll(pid, index) { studioCurate(pid, { op: "icon_all", index }); }   // Lista -> komplet ikon
 
 // "Dodaj zdjecie z dysku" w oknie planu: zapisz do extras -> dopnij do planu
 // jako process + dokolejkuj obrobke -> auto-refresh okna gdy gotowe
 let idoPlanReprocessTimer = null;
 $("idoPlanAddInput").addEventListener("change", async (e) => {
-  const f = e.target.files[0];
+  const files = [...(e.target.files || [])];
   e.target.value = "";
-  if (!f || !planOfferId || planSource !== "idosell") return;
+  if (!files.length || !planOfferId || planSource !== "idosell") return;
   const pid = planOfferId;
-  const fd = new FormData(); fd.append("file", f);
-  let add;
-  try { add = await (await api(`/api/idosell/products/${pid}/add-local`, { method: "POST", body: fd })).json(); }
-  catch { add = { error: "Błąd wysyłki" }; }
-  if (add.error) { alert(add.error); return; }
-  const fd2 = optionsForm(new FormData()); fd2.append("extra", add.extra);
-  let res;
-  try { res = await (await api(`/api/idosell/products/${pid}/plan-add`, { method: "POST", body: fd2 })).json(); }
-  catch { res = { error: "Błąd połączenia" }; }
-  if (res.error) { alert(res.error); return; }
+  let added = 0; const errs = [];
+  for (const f of files) {   // sekwencyjnie - plan-add liczy index z aktualnego planu
+    const fd = new FormData(); fd.append("file", f);
+    try {
+      const add = await (await api(`/api/idosell/products/${pid}/add-local`, { method: "POST", body: fd })).json();
+      if (add.error) { errs.push(`${f.name}: ${add.error}`); continue; }
+      const fd2 = optionsForm(new FormData()); fd2.append("extra", add.extra);
+      const res = await (await api(`/api/idosell/products/${pid}/plan-add`, { method: "POST", body: fd2 })).json();
+      if (res.error) { errs.push(`${f.name}: ${res.error}`); continue; }
+      added++;
+    } catch { errs.push(`${f.name}: błąd połączenia`); }
+  }
+  if (errs.length) alert(`Dodano ${added}/${files.length} zdjęć.\nProblemy:\n${errs.join("\n")}`);
   openIdoPlan(pid); startPolling(); watchIdoPlanReprocess(pid);
 });
 

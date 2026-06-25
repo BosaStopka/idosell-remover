@@ -2886,6 +2886,14 @@ def idosell_plan_curate(product_id):
                 if d.get("icons"):
                     d["icons"] = [t for t in d["icons"] if t != typ]
             decs[pos]["icons"] = (decs[pos].get("icons") or []) + [typ]
+    elif op == "icon_all":
+        # "Lista" klikniete -> KOMPLET ikon (Lista+Grupa+Bez tla) na tym zdjeciu,
+        # zdjete z pozostalych. Schemat: jedno zdjecie nosi wszystkie 3 ikony.
+        if decs[pos].get("action") == "delete":
+            return jsonify({"error": "Usuniete zdjecie nie moze byc ikona"}), 400
+        for d in decs:
+            d["icons"] = []
+        decs[pos]["icons"] = ["shop", "group", "auction"]
     else:
         return jsonify({"error": "Nieznana operacja"}), 400
     plan["decisions"] = decs
@@ -2930,19 +2938,29 @@ def idosell_plan_add(product_id):
     decs = plan.get("decisions", [])
     # wysoki index (>=901) dla zdjec z dysku - nie koliduje ze slotami galerii
     new_idx = max([900] + [d.get("index", 0) for d in decs]) + 1
-    decs.append({"index": new_idx, "image_id": None, "slot": None,
-                 "url": None, "action": "process", "mirror": False,
-                 "icons": [], "extra": extra})
-    plan["decisions"] = decs
-    pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
-                  encoding="utf-8")
     try:
         data = (EXTRAS_DIR / extra).read_bytes()
     except OSError as e:
         return jsonify({"error": str(e)}), 500
-    submit_job(f"{product_id}_{new_idx}.jpg", data,
-               {**options, "mirror": False}, source="idosell")
-    return jsonify({"ok": True, "index": new_idx})
+    # fashion (kolorowe/zlozone tlo) -> zostaw 1:1 (bez ciecia tla) + flaga, zeby
+    # galeria wrzucila je na POZYCJE 2 (jak auto-wykrycie w masowce). Inaczej
+    # dodane z zewnatrz fashion bylo ciete z tla i ladowalo na koncu galerii.
+    try:
+        is_fashion = analyze_thumb(data)["white"] < 0.40
+    except Exception:
+        is_fashion = False
+    decs.append({"index": new_idx, "image_id": None, "slot": None,
+                 "url": None, "action": "process", "mirror": False,
+                 "icons": [], "extra": extra, "fashion": is_fashion})
+    plan["decisions"] = decs
+    pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
+                  encoding="utf-8")
+    if is_fashion:
+        submit_kept(product_id, new_idx, data, fashion=True)
+    else:
+        submit_job(f"{product_id}_{new_idx}.jpg", data,
+                   {**options, "mirror": False}, source="idosell")
+    return jsonify({"ok": True, "index": new_idx, "fashion": is_fashion})
 
 
 @app.post("/api/idosell/products/<int:product_id>/add-url")
@@ -2980,15 +2998,22 @@ def idosell_add_url(product_id):
     # wysoki index (>=901) - zdjecie dodane laduje na koncu galerii (mozna
     # przesunac w Studio); nie koliduje ze slotami oryginalnej galerii
     new_idx = max([900] + [d.get("index", 0) for d in decs]) + 1
+    try:
+        is_fashion = analyze_thumb(content)["white"] < 0.40
+    except Exception:
+        is_fashion = False
     decs.append({"index": new_idx, "image_id": None, "slot": None,
                  "url": None, "action": "process", "mirror": False,
-                 "icons": [], "extra": fname})
+                 "icons": [], "extra": fname, "fashion": is_fashion})
     plan["decisions"] = decs
     pf.write_text(json.dumps(plan, indent=2, ensure_ascii=False),
                   encoding="utf-8")
-    submit_job(f"{product_id}_{new_idx}.jpg", content,
-               {**options, "mirror": False}, source="idosell")
-    return jsonify({"ok": True, "index": new_idx, "w": w, "h": h})
+    if is_fashion:
+        submit_kept(product_id, new_idx, content, fashion=True)
+    else:
+        submit_job(f"{product_id}_{new_idx}.jpg", content,
+                   {**options, "mirror": False}, source="idosell")
+    return jsonify({"ok": True, "index": new_idx, "w": w, "h": h, "fashion": is_fashion})
 
 
 # ------------- IdoSell FAZA 2: wykonanie planu (zapis do sklepu) -------------
@@ -3122,20 +3147,31 @@ def save_ido_plan(product_id: int, plan: dict):
 
 
 def _gallery_ordered(rows, mode="fashion_second"):
-    """Domyslna kolejnosc galerii: [1: glowny profil] [2: fashion/lifestyle]
-    [3+: reszta wg oryginalnej kolejnosci]; delete na koniec (i tak nie ide do
-    galerii). rows = decisions albo items (potrzebne pola: action, fashion).
+    """Domyslna kolejnosc galerii: [1: glowny profil/shop-ikona] [2: JEDNO
+    lifestyle (hak)] [3+: zdjecia towaru] [potem: pozostale lifestyle] [delete na
+    koniec]. rows = decisions albo items (potrzebne pola: action, fashion).
     mode 'raw' = bez zmian. Wspolne dla podgladu/wysylki (build_ido_plan_preview)
     i pozycji w siatce Studio (gallery_pos) - zeby pokazywaly to samo."""
     if mode != "fashion_second":
         return list(rows)
     non_del = [r for r in rows if r.get("action") != "delete"]
     dels = [r for r in rows if r.get("action") == "delete"]
-    fashion = [r for r in non_del if r.get("fashion")]
-    nonfash = [r for r in non_del if not r.get("fashion")]
-    if fashion and nonfash:
-        return [nonfash[0]] + fashion + nonfash[1:] + dels
-    return list(rows)
+    # zdjecie z ikona 'shop' (miniaturka IdoSell, przycisk Lista) -> POZYCJA 1.
+    # Allegro bierze pozycje 1 jako miniaturke, wiec miniaturka sklepu = pierwsze
+    # zdjecie na obu. Domyslnie shop jest na #1, wiec to bez zmian; rozni sie tylko
+    # gdy user przeniosl Liste na inne zdjecie. Brak shop -> stara logika.
+    lead = next((r for r in non_del if "shop" in (r.get("icons") or [])), None)
+    if lead is None:
+        lead = next((r for r in non_del if not r.get("fashion")), None)
+    if lead is None:
+        return list(rows)   # same lifestyle / brak nie-fashion i shop -> bez zmian
+    rest = [r for r in non_del if r is not lead]
+    fashion = [r for r in rest if r.get("fashion")]
+    nonfash = [r for r in rest if not r.get("fashion")]
+    # pozycja 2 = TYLKO JEDNO lifestyle (hak); pozostale lifestyle na KONIEC, zeby
+    # zdjecia TOWARU szly wczesniej. Wczesniej wszystkie lifestyle ladowaly na
+    # 2,3,4... i spychaly zdjecia produktu dalej.
+    return [lead] + fashion[:1] + nonfash + fashion[1:] + dels
 
 
 def build_ido_plan_preview(product_id: int) -> dict:
