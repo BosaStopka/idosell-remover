@@ -1529,13 +1529,16 @@ function renderSendRow(r) {
   const vCount = offers.length ? `warianty ${al.ok_count || 0}/${offers.length}` : "";
   // info o ⚠ IdoSell: weryfikacja niezgodna = sloty nie 1..N (zwykle benign)
   const v = ido.verify || {};
-  const idoWarn = warn ? `<div style="color:#ff8a3d">IdoSell ⚠ weryfikacja: ${v.count != null ? v.count + " zdjęć, " : ""}sloty ${(v.slots || []).join(",") || "?"} (oczekiwano 1..${v.expected != null ? v.expected : "?"})${v.icons_ok === false ? `, brak ikon: ${(v.icons_missing || []).join(",")}` : ""}. Numeracja slotów - galeria i tak idzie po priorytecie, zwykle nieszkodliwe.</div>` : "";
+  const idoWarn = v.ok === false ? `<div style="color:#ff8a3d">IdoSell ⚠ weryfikacja: ${v.count != null ? v.count + " zdjęć, " : ""}sloty ${(v.slots || []).join(",") || "?"} (oczekiwano 1..${v.expected != null ? v.expected : "?"})${v.icons_ok === false ? `, brak ikon: ${(v.icons_missing || []).join(",")}` : ""}. Numeracja slotów - galeria i tak idzie po priorytecie, zwykle nieszkodliwe.</div>` : "";
+  const skipped = ido.skipped_keep || [];
+  const idoSkip = skipped.length ? `<div style="color:#ff8a3d">IdoSell: pominięto ${skipped.length} zdj. 'Zostaw' (brak w sklepie): ${esc(skipped.join(", "))} - wysłano resztę. Jeśli to nie było fashion, można zignorować.</div>` : "";
   const detailHtml = `${ido.error ? `<div style="color:var(--err)">IdoSell: ${esc(ido.error)}</div>` : ""}
       ${idoWarn}
+      ${idoSkip}
       ${al.error ? `<div style="color:var(--err)">Allegro: ${esc(al.error)}</div>` : ""}
       ${al.reason ? `<div style="color:var(--muted)">Allegro: ${esc(al.reason)}</div>` : ""}
       ${auctions ? `<div style="margin-top:3px">${auctions}</div>` : ""}`;
-  const hasDetail = !!(ido.error || idoWarn || al.error || al.reason || auctions);
+  const hasDetail = !!(ido.error || idoWarn || idoSkip || al.error || al.reason || auctions);
   const open = prob || warn || expandedSends.has(pid);   // problemy/warn rozwiniete; OK zwiniete
   const bcol = prob ? "var(--err)" : warn ? "#ff8a3d55" : "var(--line)";
   return `<div style="border:1px solid ${bcol};border-radius:10px;padding:9px 12px;margin-bottom:8px">

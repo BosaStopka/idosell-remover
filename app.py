@@ -3353,13 +3353,12 @@ def _ido_execute_one(product_id: int) -> dict:
         current_stems = {_id_stem(i["id"]) for i in current}
         keep_ids = {d.get("image_id") for d in plan["decisions"]
                     if d["action"] == "keep" and d.get("image_id")}
-        # porownanie po slocie (bez rozszerzenia) - .webp w planie vs .jpg w sklepie
-        missing = {kid for kid in keep_ids if _id_stem(kid) not in current_stems}
-        if missing:
-            raise IdoExecError(
-                f"Zdjecia oznaczone 'Zostaw' zniknely ze sklepu "
-                f"({', '.join(sorted(missing))}) - otworz produkt "
-                f"i zapisz plan ponownie", 409)
+        # 'Zostaw' brakujace w sklepie: IGNORUJ i jedz dalej (czesto bledna
+        # auto-detekcja fashion + zdjecie i tak zniknelo ze sklepu). Pomijamy je
+        # w wysylce, reszta galerii leci normalnie; raportujemy jako ostrzezenie.
+        # Porownanie po slocie (bez rozszerzenia) - .webp w planie vs .jpg w sklepie.
+        skipped_keep = sorted(kid for kid in keep_ids
+                              if _id_stem(kid) not in current_stems)
 
         # 2) fizyczny backup aktualnych zdjec + 3 ikon na dysk
         backup = ido_backup_gallery(product_id, current)
@@ -3379,9 +3378,7 @@ def _ido_execute_one(product_id: int) -> dict:
                 entry = next((b for b in backup
                               if _id_stem(b["id"]) == _id_stem(item["image_id"])), None)
                 if entry is None:
-                    raise IdoExecError(
-                        f"Zdjecie {item['image_id']} (Zostaw) zniknelo "
-                        f"ze sklepu - zapisz plan ponownie", 409)
+                    continue   # brak w sklepie -> pomijamy (ignoruj i jedz dalej)
                 data = (ORIGINALS_DIR / entry["file"]).read_bytes()
             b64 = base64.b64encode(data).decode()
             images_b64.append(b64)
@@ -3394,7 +3391,8 @@ def _ido_execute_one(product_id: int) -> dict:
             if item["action"] == "delete":
                 continue
             for typ in item.get("icons") or []:
-                if typ in idosell_client.SETTABLE_ICON_TYPES:
+                # item["index"] not in item_b64 = zdjecie pominiete (brak w sklepie)
+                if typ in idosell_client.SETTABLE_ICON_TYPES and item["index"] in item_b64:
                     icons_b64[typ] = item_b64[item["index"]]
 
         final_count = len(images_b64)
@@ -3461,11 +3459,12 @@ def _ido_execute_one(product_id: int) -> dict:
         "backup_count": len(backup),
         "verified": verify,
         "lowres_sent": lowres_sent,
+        "skipped_keep": skipped_keep,
     })
     return {"ok": True, "uploaded": uploaded,
             "final_count": final_count, "verify": verify,
             "icons_set": sorted(icons_b64), "archive": archive,
-            "lowres_sent": lowres_sent,
+            "lowres_sent": lowres_sent, "skipped_keep": skipped_keep,
             "executed_at": plan["executed_at"]}
 
 
@@ -3622,10 +3621,13 @@ def send_worker():
             try:
                 r = _ido_execute_one(int(pid))
                 v = r.get("verify") or {}
+                skipped = r.get("skipped_keep") or []
                 with send_lock:
                     send_records[pid]["ido"] = {
-                        "status": "ok" if v.get("ok") else "warn",
-                        "verify": v, "final_count": r.get("final_count")}
+                        # pominiete 'Zostaw' (brak w sklepie) -> warn, ale wyslane
+                        "status": "ok" if (v.get("ok") and not skipped) else "warn",
+                        "verify": v, "final_count": r.get("final_count"),
+                        "skipped_keep": skipped}
                 ido_ok = True
             except Exception as e:   # IdoExecError i inne - jeden produkt nie wywala workera
                 with send_lock:
