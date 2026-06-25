@@ -11,8 +11,8 @@ _session = None
 DEFAULTS = {
     "size": 1600,            # bok kwadratu wyjsciowego
     "padding": 0.90,         # maks. udzial produktu w kadrze
-    "max_upscale": 4.5,      # maks. powiekszenie malych zdjec (4.5: male zrodla
-    #                          wypelniaja kadr; wyzsze = wiecej rozmycia)
+    "max_upscale": 4.5,      # (legacy - juz NIE ucina rozmiaru; patrz UPSCALE_CEILING).
+    #                          Sizing ZAWSZE celuje w padding dla spojnosci galerii.
     "shadow": True,          # cien wlaczony (master)
     # minimal = jednolity kadr (crop+pad 90% + cien-kaluza) dla KAZDEGO zdjecia
     # - spojny katalog, bez trybu ZACHOWAJ (ktory przy zlozonym tle potrafil
@@ -309,10 +309,17 @@ def preserve_to_white(src_rgb, alpha, plate_pct=88) -> Image.Image:
     return base.convert("RGB")
 
 
+# Sufit bezpieczenstwa powiekszania. Sizing ZAWSZE celuje w padding (spojny
+# rozmiar produktu w calej galerii) - male zrodla tez wypelniaja kadr; max_upscale
+# juz NIE ucina. Ceiling chroni tylko przed absurdalnym powiekszeniem (skrajnie
+# male zrodlo). Miekkosc malego zrodla sygnalizuje badge "za maly" (lowres).
+UPSCALE_CEILING = 8.0
+
+
 def _scale_to_pad(img, size, padding, max_upscale, sharpen):
     max_dim = int(min(size) * float(padding))
     w, h = img.size
-    ratio = min(max_dim / w, max_dim / h, float(max_upscale))
+    ratio = min(max_dim / w, max_dim / h, UPSCALE_CEILING)   # do paddingu (max_upscale inert)
     if ratio != 1:
         img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
         if sharpen and ratio > 1.3:
@@ -349,7 +356,7 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
         pimg = preserve_to_white(
             src_rgb, alpha_full, int(opt.get("preserve_plate_pct", 88)))
         w, h = pimg.size
-        ratio = min(size[0] / max(w, h), float(opt["max_upscale"]))
+        ratio = min(size[0] / max(w, h), UPSCALE_CEILING)   # pelny kadr; max_upscale inert
         if ratio != 1:
             pimg = pimg.resize(
                 (max(1, int(w * ratio)), max(1, int(h * ratio))), Image.LANCZOS)
@@ -372,7 +379,7 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
         # skala PO SAMYM BUCIE (jak minimal) - rozmiar buta spojny w katalogu;
         # realny cien zostaje w obrazie i laduje w dolnym/bocznym marginesie.
         max_dim = int(min(size) * float(opt["padding"]))
-        ratio = min(max_dim / w, max_dim / h, float(opt["max_upscale"]))
+        ratio = min(max_dim / w, max_dim / h, UPSCALE_CEILING)   # do paddingu (max_upscale inert)
         if ratio != 1:
             pimg = pimg.resize((int(pimg.width * ratio),
                                 int(pimg.height * ratio)), Image.LANCZOS)

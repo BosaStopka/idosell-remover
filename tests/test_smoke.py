@@ -72,6 +72,25 @@ def test_compose_returns_canvas():
     assert out.size == (400, 400)
 
 
+def test_compose_small_source_fills_to_padding():
+    # Opcja 1 (spojnosc galerii): male zrodlo TEZ wypelnia kadr do ~padding
+    # (max_upscale juz nie ucina rozmiaru, tylko UPSCALE_CEILING). Regresja: ze
+    # cala galeria ma rowny rozmiar produktu niezaleznie od rozdzielczosci.
+    import numpy as np
+    from PIL import Image
+    import pipeline
+    arr = np.zeros((200, 200, 4), "uint8")
+    arr[75:125, 75:125, :3] = (150, 90, 40)   # maly produkt 50x50
+    arr[75:125, 75:125, 3] = 255
+    rgba = Image.fromarray(arr, "RGBA")
+    out = pipeline.compose(rgba, {**pipeline.DEFAULTS, "shadow": False, "size": 400})
+    a = np.asarray(out.convert("RGB"))
+    nw = (a < 248).any(axis=2)
+    ys, xs = np.where(nw)
+    fill = max(xs.max() - xs.min() + 1, ys.max() - ys.min() + 1) / 400
+    assert fill > 0.85, f"male zrodlo ma wypelnic ~padding (0.90), jest {fill:.0%}"
+
+
 def test_clean_sole_studio_vs_fashion():
     import numpy as np
     from PIL import Image
