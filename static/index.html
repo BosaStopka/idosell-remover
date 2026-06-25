@@ -327,6 +327,7 @@
   }
   .ed-stage img, .ed-stage canvas {
     display: block; max-width: 100%; max-height: 68vh; object-fit: contain;
+    transform-origin: center center;
   }
   #edResult {
     position: absolute; inset: 0; margin: auto; cursor: crosshair;
@@ -2643,7 +2644,16 @@ const ed = {
   jobId: null, rgb: null, mask: null, maskCtx: null, tmp: null, tmpCtx: null,
   mode: "restore", size: 36, undo: [],
   drawing: false, last: null,
+  zoom: 1, panX: 0, panY: 0, panning: false, panStart: null, spaceDown: false,
 };
+
+// zoom/pan edytora przez CSS transform na OBU obrazach (przed+po) - pedzel nie
+// wymaga zmian, bo edPos liczy z getBoundingClientRect (uwzglednia transform).
+function edApplyTransform() {
+  const t = `translate(${ed.panX}px, ${ed.panY}px) scale(${ed.zoom})`;
+  $("edResult").style.transform = t;
+  $("edBefore").style.transform = t;
+}
 
 async function openEditor(jobId) {
   let data;
@@ -2655,7 +2665,8 @@ async function openEditor(jobId) {
   ed.jobId = jobId;
   ed.undo = [];
   $("edTitle").textContent = data.name;
-  $("edStatus").textContent = "";
+  $("edStatus").textContent = data.editable
+    ? "scroll = zoom · spacja+przeciągnij = przesuń · 0 = reset" : "";
   $("edBrushTools").style.display = data.editable ? "flex" : "none";
   $("edApply").style.display = data.editable ? "" : "none";
 
@@ -2683,6 +2694,7 @@ async function openEditor(jobId) {
   const result = $("edResult");
   result.width = rgb.naturalWidth; result.height = rgb.naturalHeight;
   edComposite();
+  ed.zoom = 1; ed.panX = 0; ed.panY = 0; edApplyTransform();
   $("edSplit").value = 100;
   edSplitUpdate();
   $("editorOverlay").classList.remove("hidden");
@@ -2746,6 +2758,13 @@ function edStroke(from, to) {
 function bindEditor() {
   const result = $("edResult");
   result.addEventListener("pointerdown", e => {
+    if (ed.spaceDown || e.button === 1) {   // przesuwanie (spacja albo srodkowy przycisk)
+      ed.panning = true;
+      ed.panStart = { x: e.clientX - ed.panX, y: e.clientY - ed.panY };
+      result.setPointerCapture(e.pointerId);
+      $("edResult").style.cursor = "grabbing";
+      return;
+    }
     if ($("edBrushTools").style.display === "none") return;
     ed.undo.push(ed.maskCtx.getImageData(0, 0, ed.mask.width, ed.mask.height));
     if (ed.undo.length > 15) ed.undo.shift();
@@ -2756,13 +2775,55 @@ function bindEditor() {
     result.setPointerCapture(e.pointerId);
   });
   result.addEventListener("pointermove", e => {
+    if (ed.panning) {
+      ed.panX = e.clientX - ed.panStart.x;
+      ed.panY = e.clientY - ed.panStart.y;
+      edApplyTransform();
+      return;
+    }
     if (!ed.drawing) return;
     const p = edPos(e);
     edStroke(ed.last, p);
     ed.last = p;
     edComposite();
   });
-  result.addEventListener("pointerup", () => { ed.drawing = false; });
+  result.addEventListener("pointerup", () => {
+    ed.drawing = false; ed.panning = false;
+    $("edResult").style.cursor = ed.spaceDown ? "grab" : "crosshair";
+  });
+
+  // zoom kolkiem myszy DO KURSORA (origin = srodek sceny, ktory pokrywa sie ze
+  // srodkiem obrazow); przy zoom>1 wymuszamy split=100, by clip-path nie kolidowal
+  $("edStage").addEventListener("wheel", e => {
+    e.preventDefault();
+    const sr = $("edStage").getBoundingClientRect();
+    const cx = e.clientX - sr.left - sr.width / 2;
+    const cy = e.clientY - sr.top - sr.height / 2;
+    const f = e.deltaY < 0 ? 1.2 : 1 / 1.2;
+    const nz = Math.min(8, Math.max(1, ed.zoom * f));
+    ed.panX = cx - (cx - ed.panX) * (nz / ed.zoom);
+    ed.panY = cy - (cy - ed.panY) * (nz / ed.zoom);
+    ed.zoom = nz;
+    if (ed.zoom === 1) { ed.panX = 0; ed.panY = 0; }
+    if (ed.zoom > 1 && +$("edSplit").value !== 100) { $("edSplit").value = 100; edSplitUpdate(); }
+    edApplyTransform();
+  }, { passive: false });
+  // spacja = chwilowy tryb przesuwania; "0" = reset zoomu
+  document.addEventListener("keydown", e => {
+    if ($("editorOverlay").classList.contains("hidden")) return;
+    if (e.code === "Space" && !ed.spaceDown) {
+      ed.spaceDown = true; if (!ed.panning) $("edResult").style.cursor = "grab";
+      e.preventDefault();
+    } else if (e.key === "0") {
+      ed.zoom = 1; ed.panX = 0; ed.panY = 0; edApplyTransform();
+    }
+  });
+  document.addEventListener("keyup", e => {
+    if (e.code === "Space") {
+      ed.spaceDown = false; if (!ed.panning) $("edResult").style.cursor = "crosshair";
+    }
+  });
+  $("edSplit").addEventListener("input", edSplitUpdate);
 
   $("edRestore").addEventListener("click", () => {
     ed.mode = "restore";
