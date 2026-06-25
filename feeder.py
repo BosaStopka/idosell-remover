@@ -31,9 +31,54 @@ CHUNK = 6
 SEASONS = ["lato", "wiosna", "jesien"]   # kolejnosc dosypywania (zima pomijamy)
 LOG = BASE / "feeder.log"
 
-_cfg = json.loads((BASE / "app_config.json").read_text(encoding="utf-8"))
-CK = hashlib.sha256((_cfg["pin"] + _cfg["cookie_secret"]).encode()).hexdigest()
-HDR = {"Cookie": f"bs_auth_ido={CK}"}
+
+# ---- czysta logika decyzji (testowalna bez serwera/configu) ----
+def should_feed(q, low=LOW) -> bool:
+    """Czy dosypywac teraz? Tylko gdy serwer odpowiedzial, NIE pauza i kolejka
+    spadla ponizej dolnego progu (LOW). Inaczej czekamy."""
+    if not q:
+        return False
+    if q.get("paused"):
+        return False
+    return q.get("queued", 0) < low
+
+
+def take_chunk(cand, cursor, act, chunk_size=CHUNK):
+    """Wybierz nastepna paczke <= chunk_size, pomijajac produkty juz active
+    (w trakcie/w kolejce). Zwraca (chunk, nowy_cursor). Czysta - bez I/O."""
+    chunk = []
+    while len(chunk) < chunk_size and cursor < len(cand):
+        pid = cand[cursor]
+        cursor += 1
+        if str(pid) not in act:
+            chunk.append(pid)
+    return chunk, cursor
+
+
+def select_candidates(products_by_season, act, seasons=SEASONS):
+    """Z mapy {sezon: [produkty]} zbuduj liste ID do dosypania: tylko
+    nieprzetworzone i niewyslane, nie active, bez duplikatow; kolejnosc wg
+    'seasons'. Czysta - logika z build_candidates bez HTTP."""
+    seen, cand = set(), []
+    for s in seasons:
+        for p in products_by_season.get(s, []):
+            pid = str(p["id"])
+            if (not p.get("processed") and not p.get("executed")
+                    and pid not in act and pid not in seen):
+                cand.append(int(p["id"]))
+                seen.add(pid)
+    return cand
+
+
+def _auth_header():
+    """Cookie auth liczone leniwie - zeby import feeder w testach NIE wymagal
+    app_config.json (modul ma byc importowalny do testow czystych funkcji)."""
+    cfg = json.loads((BASE / "app_config.json").read_text(encoding="utf-8"))
+    ck = hashlib.sha256((cfg["pin"] + cfg["cookie_secret"]).encode()).hexdigest()
+    return {"Cookie": f"bs_auth_ido={ck}"}
+
+
+HDR = {}   # wypelniane w main() przez _auth_header()
 
 
 def log(msg):
@@ -89,16 +134,10 @@ def season_products(season):
 
 def build_candidates():
     act = active_pids()
-    seen, cand = set(), []
+    by_season = {s: season_products(s) for s in SEASONS}
     for s in SEASONS:
-        n0 = len(cand)
-        for p in season_products(s):
-            pid = str(p["id"])
-            if (not p.get("processed") and not p.get("executed")
-                    and pid not in act and pid not in seen):
-                cand.append(int(p["id"]))
-                seen.add(pid)
-        log(f"sezon {s}: +{len(cand)-n0} kandydatow")
+        log(f"sezon {s}: {len(by_season[s])} produktow")
+    cand = select_candidates(by_season, act)
     log(f"RAZEM kandydatow do dosypania: {len(cand)}")
     return cand
 
@@ -114,6 +153,8 @@ def feed(chunk):
 
 
 def main():
+    global HDR
+    HDR = _auth_header()
     log("=== feeder START (drip-feed kolejki) ===")
     cand = build_candidates()
     cursor = 0
@@ -123,12 +164,9 @@ def main():
             log("serwer nie odpowiada - czekam")
             time.sleep(INTERVAL)
             continue
-        if q.get("paused"):
+        if not should_feed(q):           # pauza albo kolejka jeszcze pelna (>=LOW)
             time.sleep(INTERVAL)
-            continue                     # pauza -> nie dosypuj
-        if q.get("queued", 0) >= LOW:
-            time.sleep(INTERVAL)
-            continue                     # jeszcze duzo w kolejce
+            continue
         if cursor >= len(cand):
             log("wszyscy kandydaci dosypani - czuwam (kolejka sie domiela)")
             time.sleep(INTERVAL * 4)
@@ -136,12 +174,7 @@ def main():
         act = active_pids()
         added = 0
         while q.get("queued", 0) < HIGH and cursor < len(cand):
-            chunk = []
-            while len(chunk) < CHUNK and cursor < len(cand):
-                pid = cand[cursor]
-                cursor += 1
-                if str(pid) not in act:
-                    chunk.append(pid)
+            chunk, cursor = take_chunk(cand, cursor, act)
             if not chunk:
                 break
             added += feed(chunk)
