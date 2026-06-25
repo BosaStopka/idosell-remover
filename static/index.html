@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bosa Stopka - Studio Zdjęć</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3/dist/tabler-icons.min.css">
 <style>
   :root {
     --bg: #0b0d13;
@@ -190,6 +191,31 @@
   .badge.allegro { color: #ff8a3d; border: 1px solid #ff8a3d; }
   .card a { color: var(--accent2); font-size: 12.5px; text-decoration: none; }
   .card a:hover { text-decoration: underline; }
+  .icon-toolbar { display: flex; align-items: center; gap: 1px; flex-wrap: wrap; }
+  .icon-btn {
+    display: inline-grid; place-items: center; width: 30px; height: 30px;
+    border-radius: 8px; color: var(--muted); cursor: pointer; border: none;
+    background: none; font-size: 16px; line-height: 1; text-decoration: none;
+  }
+  .icon-btn:hover { background: var(--panel2); color: var(--text); text-decoration: none; }
+  .icon-btn.accent { color: #a29bfe; }
+  .icon-btn.danger:hover { color: var(--err); }
+  .busy { pointer-events: none; opacity: .7; }
+  .ti.spin { animation: ti-spin .7s linear infinite; }
+  @keyframes ti-spin { to { transform: rotate(360deg); } }
+  .hbtn {
+    display: inline-grid; place-items: center; width: 34px; height: 34px;
+    border-radius: 9px; color: var(--muted); cursor: pointer; font-size: 17px;
+    border: 1px solid var(--border); background: var(--panel2);
+  }
+  .hbtn:hover { color: var(--text); border-color: var(--accent); }
+  .hbtn.accent { color: #a29bfe; border-color: #3a3470; }
+  .hbtn-primary {
+    display: inline-flex; align-items: center; gap: 7px; height: 34px;
+    padding: 0 15px; border-radius: 10px; font-size: 13px; font-weight: 500;
+    cursor: pointer; color: #04342c; background: var(--accent2); border: none;
+  }
+  .hbtn-primary:disabled { opacity: .45; cursor: not-allowed; }
   .x-btn {
     position: absolute; top: 8px; right: 8px; width: 26px; height: 26px;
     border-radius: 50%; border: none; background: rgba(0,0,0,.55); color: #fff;
@@ -865,43 +891,60 @@ cards.addEventListener("mouseout", e => {
   hoverZoom.style.display = "none";
 });
 
+// stan ladowania przyciskow-IKON: spinner zamiast tekstu. Po redesignie na ikony
+// stare `el.textContent="..."` podmienialo ikone na tekst i rozwalalo layout.
+// busy zapamietuje oryginalna ikone, unbusy ja przywraca (sukces i tak robi
+// refresh()->render, ktory odbudowuje przycisk).
+function busy(el) {
+  if (!el) return;
+  if (el.dataset.html == null) el.dataset.html = el.innerHTML;
+  el.innerHTML = '<i class="ti ti-loader-2 spin"></i>';
+  el.classList.add("busy");
+}
+function unbusy(el) {
+  if (!el || el.dataset.html == null) return;
+  el.innerHTML = el.dataset.html;
+  delete el.dataset.html;
+  el.classList.remove("busy");
+}
+
 async function retryJob(id, el) {
-  el.textContent = "...";
+  busy(el);
   const fd = optionsForm(new FormData());
   try {
     const res = await api(`/api/jobs/${id}/retry`, { method: "POST", body: fd });
     const data = await res.json();
-    if (data.error) { alert(data.error); el.textContent = "↻ Ponów"; return; }
+    if (data.error) { alert(data.error); unbusy(el); return; }
     startPolling();
-  } catch { el.textContent = "↻ Ponów"; }
+  } catch { unbusy(el); }
 }
 
 // "Bez ramki" - ponowna obrobka z full_bleed=true (wytnij tlo, zostaw pelny kadr)
 async function retryFullBleed(id, el) {
-  if (el) el.textContent = "...";
+  busy(el);
   const fd = optionsForm(new FormData());
   fd.set("full_bleed", "true");
   fd.set("crop_only", "false");   // bez ramki = wycinamy tlo (nie tryb "przytnij tylko")
   try {
     const res = await api(`/api/jobs/${id}/retry`, { method: "POST", body: fd });
     const data = await res.json();
-    if (data.error) { alert(data.error); if (el) el.textContent = "🖼 Bez ramki"; return; }
+    if (data.error) { alert(data.error); unbusy(el); return; }
     startPolling();
-  } catch { if (el) el.textContent = "🖼 Bez ramki"; }
+  } catch { unbusy(el); }
 }
 
 // "Przywroc oryginal" - fashion/lifestyle blednie obrobione -> oryginal 1:1 (zostaw)
 async function keepOriginal(id, el) {
   if (!confirm("Przywrócić oryginał 1:1 (cofnąć wycięcie tła)?\nZdjęcie zostanie oznaczone jako fashion/lifestyle i pójdzie do galerii bez obróbki.")) return;
-  if (el) el.textContent = "...";
+  busy(el);
   try {
     const res = await api(`/api/jobs/${id}/keep-original`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
     });
     const data = await res.json();
-    if (data.error) { alert(data.error); if (el) el.textContent = "↩ Oryginał"; return; }
+    if (data.error) { alert(data.error); unbusy(el); return; }
     lastJobsKey = ""; refresh();
-  } catch { alert("Błąd połączenia"); if (el) el.textContent = "↩ Oryginał"; }
+  } catch { alert("Błąd połączenia"); unbusy(el); }
 }
 
 // odbicie lustrzane gotowego zdjecia (instant, bez re-inference) - rev busta cache
@@ -1696,14 +1739,16 @@ function render() {
     if (qaOnly && !flagged) continue;   // filtr: tylko grupy z uwagami QA
     if (lowOnly && !gjobs.some(j => j.lowres)) continue;   // tylko grupy z malym zrodlem
     const meta = studioMeta(pid, gjobs);
-    if (hideSent && meta.executed) continue;   // ukryj produkty juz wyslane
+    if (hideSent && (meta.executed || sentIdSet.has(String(pid)))) continue;   // ukryj wyslane/zakolejkowane
     if (studioSeries && String(meta.series_id || "") !== studioSeries) continue;  // filtr po serii
+    if (studioSeriesText && !String(meta.series_name || "").toLowerCase().includes(studioSeriesText)) continue;  // filtr marki/serii (tekst)
     // filtr kategoria/sezon (z idoMeta z przegladarki) - grupy bez metadanych
     // pokazujemy zawsze, zeby nie chowac produktow ktorych jeszcze nie wczytano
     if (studioCat && (meta.category || []).length && !meta.category.includes(studioCat)) continue;
     if (studioSeason && (meta.season || []).length && !meta.season.includes(studioSeason)) continue;
     const isAllegro = gjobs.some(j => j.source === "allegro");
     const isIdo = gjobs.some(j => j.source === "idosell");
+    const isAffenzahn = isIdo && gjobs.some(j => (j.series_name || "").toLowerCase().includes("affenzahn"));
     const collapsed = collapsedGroups.has(pid);
     const allDone = doneCount === gjobs.length;
     html += `<div class="group-head">
@@ -1711,19 +1756,21 @@ function render() {
       ${isIdo ? `<input type="checkbox" class="studio-grp-cb" data-pid="${esc(pid)}" title="Zaznacz produkt - zbiorcza obróbka ponowna/wysyłka/cofnięcie w pasku powyżej" ${selectedIdo.has(String(pid)) ? "checked" : ""} onclick="event.stopPropagation(); toggleIdo('${esc(pid)}', this.checked); render();" style="width:16px;height:16px;accent-color:var(--accent)">` : ""}
       <h3>📁 ${isIdo ? `<a href="${IDO_PANEL}${esc(pid)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none" title="Otwórz produkt w panelu IdoSell">${esc(pid)} ↗</a>` : esc(pid)}${meta.code ? ` · ${esc(meta.code)}` : ""}</h3>
       ${meta.executed ? `<span class="badge done" title="Galeria wysłana do IdoSell">✅ wysłane</span>` : ""}
-      ${(meta.category && meta.category.length) ? `<span class="badge" title="Rodzaj (kategoria z IdoSell)">${esc(meta.category.join(", "))}</span>` : ""}
-      ${(meta.season && meta.season.length) ? `<span class="badge" style="${meta.season.includes("zima") ? "color:#74b9ff;border:1px solid #74b9ff" : ""}" title="Pora roku (sezon z IdoSell)">${meta.season.includes("zima") ? "❄ " : ""}${esc(meta.season.join("/"))}</span>` : ""}
+      ${((meta.category && meta.category.length) || (meta.season && meta.season.length)) ? `<span style="display:inline-flex;flex-direction:column;gap:3px">
+        ${(meta.category && meta.category.length) ? `<span class="badge" title="Rodzaj (kategoria z IdoSell)">${esc(meta.category.join(", "))}</span>` : ""}
+        ${(meta.season && meta.season.length) ? `<span class="badge" style="${meta.season.includes("zima") ? "color:#74b9ff;border:1px solid #74b9ff" : ""}" title="Pora roku (sezon z IdoSell)">${meta.season.includes("zima") ? "❄ " : ""}${esc(meta.season.join("/"))}</span>` : ""}
+      </span>` : ""}
       ${meta.series_id ? `<span class="badge" style="cursor:pointer;color:var(--accent2)" onclick="setStudioSeries('${esc(meta.series_id)}','${esc((meta.series_name||'').replace(/'/g,''))}')" title="Pokaż tylko ten model (serię)">📦 ${esc(meta.series_name || ("seria " + meta.series_id))}</span>` : ""}
-      <span class="badge">${doneCount}/${gjobs.length} gotowych</span>
-      ${flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ ${flagged} do przeglądu</span>`
-                : (allDone && doneCount ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">✓ QA OK</span>` : "")}
+      ${!allDone ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d" title="Część zdjęć jeszcze nieobrobiona">${doneCount}/${gjobs.length} gotowych</span>` : ""}
+      ${flagged ? `<span class="badge" style="color:#ff8a3d;border:1px solid #ff8a3d">⚠ ${flagged} do przeglądu</span>` : ""}
       ${isAllegro ? `<span class="badge allegro">Allegro</span>` : ""}
-      ${isIdo ? `<span class="badge" style="color:var(--ok);border:1px solid var(--ok)">IdoSell</span>` : ""}
-      <span style="margin-left:auto;display:flex;gap:8px">
-        ${isIdo ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="reprocessProduct('${esc(pid)}')" title="Obrób ten produkt jeszcze raz od nowa, z aktualnymi ustawieniami (skasuje obecne karty i plan, przetworzy wszystkie zdjęcia ponownie)">🔄 Obrób jeszcze raz</button>` : ""}
-        ${isIdo ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="addPhotoUrl('${esc(pid)}')" title="Dodaj brakujące zdjęcie z linku (np. znalezione w sieci) - pobierze, obrobi i doda na koniec galerii">🔗 Dodaj zdjęcie (link)</button>` : ""}
-        ${doneCount >= 3 ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="levelColors('${esc(pid)}', this)" title="Wykryj zdjęcia z innej sesji (inna tonacja) i dopasuj do większości">🎨 Wyrównaj barwy</button>` : ""}
-        ${isIdo ? `<button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" ${allDone ? "" : "disabled title='Najpierw dokończ obróbkę'"} onclick="openIdoPlan('${esc(pid)}')">📤 Wyślij do IdoSell</button>` : ""}
+      <span style="margin-left:auto;display:flex;gap:7px;align-items:center">
+        ${isIdo ? `<button class="hbtn" onclick="reprocessProduct('${esc(pid)}')" title="Obrób ten produkt jeszcze raz od nowa, z aktualnymi ustawieniami (skasuje obecne karty i plan, przetworzy wszystkie zdjęcia ponownie)" aria-label="Obrób jeszcze raz"><i class="ti ti-refresh"></i></button>` : ""}
+        ${isAffenzahn ? `<button class="hbtn accent" onclick="importAffenzahn('${esc(pid)}', this)" title="Import Affenzahn - zdjęcia producenta (2000px) wg mapowania, zastępują karty: studyjne ich wycięciem + nasz cień, lifestyle 1:1. Nic nie idzie do IdoSell." aria-label="Import Affenzahn"><i class="ti ti-download"></i></button>` : ""}
+        ${isIdo ? `<button class="hbtn" onclick="addPhotoUrl('${esc(pid)}')" title="Dodaj brakujące zdjęcie z linku - pobierze, obrobi i doda na koniec galerii" aria-label="Dodaj zdjęcie z linku"><i class="ti ti-link"></i></button>` : ""}
+        ${isIdo ? `<button class="hbtn" onclick="addPhotoFile('${esc(pid)}')" title="Dodaj zdjęcie z dysku - obrobi i doda na koniec galerii" aria-label="Dodaj zdjęcie z dysku"><i class="ti ti-upload"></i></button>` : ""}
+        ${doneCount >= 3 ? `<button class="hbtn" onclick="levelColors('${esc(pid)}', this)" title="Wyrównaj barwy - wykryj zdjęcia z innej sesji i dopasuj do większości" aria-label="Wyrównaj barwy"><i class="ti ti-palette"></i></button>` : ""}
+        ${isIdo ? `<button class="hbtn-primary" ${allDone ? "" : "disabled title='Najpierw dokończ obróbkę'"} onclick="openIdoPlan('${esc(pid)}')"><i class="ti ti-send"></i>Wyślij do IdoSell</button>` : ""}
       </span>
     </div>`;
     if (collapsed) continue;
@@ -1734,7 +1781,7 @@ function render() {
         // stabilny cache-buster: zmienia sie po ponownej obrobce (seconds) i odbiciu (rev)
         const after = `/done/${j.result}?t=${j.id}-${j.seconds || 0}-${j.rev || 0}`;
         const editBtn = j.editable !== false
-          ? `<button class="edit-btn" onclick="event.stopPropagation();openEditor('${j.id}')" title="Edytor maski (pędzel)">✏️</button>`
+          ? `<button class="edit-btn" onclick="event.stopPropagation();openEditor('${j.id}')" title="Edytor maski (pędzel)" aria-label="Edytor maski"><i class="ti ti-pencil"></i></button>`
           : "";
         thumb = j.orig
           ? `<img src="${after}" data-after="${after}" data-before="/originals/${esc(j.orig)}"
@@ -1757,18 +1804,20 @@ function render() {
             ${j.kept ? `<span class="badge" style="color:#74b9ff;border:1px solid #74b9ff" title="${j.fashion ? "Wykryte jako fashion (kolorowe/złożone tło) - zostawione BEZ obróbki. Jeśli to pomyłka, kliknij 'Obrób mimo to'." : "Zostawione bez obróbki (zdjęcie 1:1 do galerii)."}">${j.fashion ? "🧍 fashion - zostawione" : "✋ zostawione"}</span>` : ""}
             ${j.dup ? `<span class="badge" style="color:var(--err);border:1px solid var(--err)" title="Duplikat zdjęcia #${j.dup_keep}, które ma wyższą rozdzielczość. Nominowane do usunięcia - kliknij 🗑 Usuń (albo zostaw, jeśli to nie duplikat).">🔁 duplikat → usuń?</span>` : ""}
           </div>
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            ${j.status === "done" ? `<a href="/done/${j.result}" download>Pobierz JPG</a>` : ""}
-            ${j.kept ? `<a href="#" onclick="processAnyway('${esc(j.pid || pid)}', ${j.photo_index}); return false" title="To NIE jest fashion - obrób je mimo wszystko (wytnij tło)">🪄 Obrób mimo to</a>
-              ${j.orig ? `<a href="#" onclick="replaceUrl('${j.id}'); return false" title="Podmień to zdjęcie fashion na lepszą wersję z linku (np. ta sama fotka w dobrej jakości z innego produktu). ZOSTAJE 1:1, bez wycinania tła.">🔗 Zamień (link)</a>
-              <a href="#" onclick="replaceFile('${j.id}'); return false" title="Podmień to zdjęcie fashion na lepszą wersję z dysku. ZOSTAJE 1:1, bez wycinania tła.">📁 Dysk</a>` : ""}`
-              : `${canRetry ? `<a href="#" onclick="retryJob('${j.id}', this); return false" title="Obrob ponownie z aktualnymi ustawieniami">↻ Ponów</a>` : ""}
-                 ${j.status === "done" ? `<a href="#" onclick="flipPhoto('${j.id}'); return false" title="Odbij lustrzanie gotowego zdjęcia (kierunek noska) - bez ponownej obróbki">⇄ Odbij</a>` : ""}
-                 ${j.status === "done" ? `<a href="#" onclick="retryFullBleed('${j.id}', this); return false" title="Wytnij tło, ale zostaw produkt na PEŁNYM kadrze (bez białej ramki) - dla ujęć wypełniających kadr (para z góry, detal)">🖼 Bez ramki</a>` : ""}
-                 ${j.status === "done" ? `<a href="#" onclick="keepOriginal('${j.id}', this); return false" title="To jest fashion/lifestyle - przywróć ORYGINAŁ 1:1 (cofnij wycięcie tła)">↩ Oryginał</a>` : ""}
-                 ${(j.status === "done" || j.status === "error") && j.orig ? `<a href="#" onclick="replaceUrl('${j.id}'); return false" title="Podmień źródło na lepsze zdjęcie z linku (np. wyższa rozdzielczość) i przerób ponownie">🔗 Zamień (link)</a>
-                 <a href="#" onclick="replaceFile('${j.id}'); return false" title="Podmień źródło na plik z dysku i przerób ponownie">📁 Dysk</a>` : ""}`}
-            ${j.source === "idosell" && j.pid && j.photo_index != null ? `<a href="#" onclick="studioDelete('${esc(j.pid)}', ${j.photo_index}); return false" style="color:var(--err)" title="Usuń to zdjęcie z produktu - nie pójdzie do galerii (jeśli było w sklepie, zniknie przy najbliższej wysyłce)">🗑 Usuń</a>` : ""}
+          <div class="icon-toolbar">
+            ${j.status === "done" ? `<a class="icon-btn" href="/done/${j.result}" download title="Pobierz JPG" aria-label="Pobierz JPG"><i class="ti ti-download"></i></a>` : ""}
+            ${j.kept ? `<button class="icon-btn accent" onclick="processAnyway('${esc(j.pid || pid)}', ${j.photo_index})" title="To NIE jest fashion - obrób mimo wszystko (wytnij tło)" aria-label="Obrób mimo to"><i class="ti ti-wand"></i></button>
+              ${j.orig ? `<button class="icon-btn" onclick="replaceUrl('${j.id}')" title="Podmień to zdjęcie fashion na lepszą wersję z linku. ZOSTAJE 1:1, bez wycinania tła." aria-label="Zamień (link)"><i class="ti ti-link"></i></button>
+              <button class="icon-btn" onclick="replaceFile('${j.id}')" title="Podmień to zdjęcie fashion na lepszą wersję z dysku. ZOSTAJE 1:1, bez wycinania tła." aria-label="Zamień (dysk)"><i class="ti ti-folder"></i></button>` : ""}`
+              : `${canRetry ? `<button class="icon-btn" onclick="retryJob('${j.id}', this)" title="Obrób ponownie z aktualnymi ustawieniami" aria-label="Ponów"><i class="ti ti-refresh"></i></button>` : ""}
+                 ${j.status === "done" ? `<button class="icon-btn" onclick="flipPhoto('${j.id}')" title="Odbij lustrzanie (kierunek noska) - bez ponownej obróbki" aria-label="Odbij"><i class="ti ti-flip-horizontal"></i></button>` : ""}
+                 ${j.status === "done" && j.editable !== false ? `<button class="icon-btn accent" onclick="smoothSole('${j.id}', this)" title="Podeszwa - wygładź ciemną, postrzępioną dolną krawędź w czystą linię (z maski, bez modelu). Dla ciemnych bieżników." aria-label="Podeszwa"><i class="ti ti-shoe"></i></button>` : ""}
+                 ${j.status === "done" ? `<button class="icon-btn accent" onclick="cleanSole('${j.id}', this)" title="Wyczyść podeszwę - usuń przebarwienia/otarcia z białej podeszwy (frequency separation, faktura i kontur zachowane). Tylko studyjne na białym tle; fashion pomija." aria-label="Wyczyść podeszwę"><i class="ti ti-spray"></i></button>` : ""}
+                 ${j.status === "done" && (j.orig || j.editable !== false) ? `<button class="icon-btn" onclick="${j.orig ? `retryFullBleed('${j.id}', this)` : `fullBleedFromMask('${j.id}', this)`}" title="Bez ramki - produkt na pełnym kadrze (dla ujęć wypełniających kadr). Bez oryginału (Affenzahn) liczy z maski." aria-label="Bez ramki"><i class="ti ti-maximize"></i></button>` : ""}
+                 ${j.status === "done" ? `<button class="icon-btn" onclick="keepOriginal('${j.id}', this)" title="Przywróć ORYGINAŁ 1:1 (cofnij wycięcie tła) - dla fashion/lifestyle" aria-label="Oryginał"><i class="ti ti-arrow-back-up"></i></button>` : ""}
+                 ${(j.status === "done" || j.status === "error") && j.orig ? `<button class="icon-btn" onclick="replaceUrl('${j.id}')" title="Podmień źródło na lepsze z linku i przerób ponownie" aria-label="Zamień (link)"><i class="ti ti-link"></i></button>
+                 <button class="icon-btn" onclick="replaceFile('${j.id}')" title="Podmień źródło na plik z dysku i przerób ponownie" aria-label="Zamień (dysk)"><i class="ti ti-folder"></i></button>` : ""}`}
+            ${j.source === "idosell" && j.pid && j.photo_index != null ? `<button class="icon-btn danger" onclick="studioDelete('${esc(j.pid)}', ${j.photo_index})" title="Usuń to zdjęcie z produktu - nie pójdzie do galerii (jeśli było w sklepie, zniknie przy najbliższej wysyłce)" aria-label="Usuń"><i class="ti ti-trash"></i></button>` : ""}
           </div>
           ${j.source === "idosell" && j.status === "done" && j.pid ? `
           <div class="order-row" style="margin-top:6px">
