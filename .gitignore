@@ -33,3 +33,19 @@ samples/
 _server.err.log
 _server.out.log
 lowres_sent.jsonl
+
+# Real-ESRGAN binarka + modele (nie do repo)
+tools/
+experiments/_esrgan_compare/
+.venv-dml/
+allegro_sends.json
+
+# stan workerow w tle + logi (feeder/watchdog/requeue) - dane runtime, nie do repo
+_monitor_state.json
+_summer_todo.json
+*.log
+*.log.err
+# backupy stanu (siatka bezpieczenstwa persist_jobs) - lokalne, nie do repo
+*.bak
+# artefakty eksperymentow (porownania/zrzuty) - katalogi z prefiksem _
+experiments/_*/
