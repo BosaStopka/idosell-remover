@@ -954,6 +954,103 @@ def api_recompose(job_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.post("/api/jobs/<job_id>/smooth-sole")
+def api_smooth_sole(job_id):
+    """Przycisk 'Podeszwa': wygladz dolna krawedz podeszwy (postrzepione ciemne
+    zabki -> czysta linia) rekompozycja z ZAPISANEJ maski - bez modelu. Per
+    zdjecie, opcjonalne (nie globalne). Zachowuje ustawienia/cien jak recompose."""
+    from PIL import Image
+    with lock:
+        job = jobs.get(job_id)
+    rgb_path = MASKS_DIR / f"{job_id}.rgb.jpg"
+    alpha_path = MASKS_DIR / f"{job_id}.a.png"
+    if not job or not rgb_path.exists() or not alpha_path.exists():
+        return jsonify({"error": "Brak maski - obrob zdjecie ponownie "
+                                 "(starsze/odtworzone zadania nie maja maski)"}), 404
+    options = parse_options(request.form)
+    try:
+        t0 = time.time()
+        rgb = Image.open(rgb_path)
+        alpha = Image.open(alpha_path).convert("L")
+        smoothed = pipeline.smooth_sole_edge(alpha)
+        img = pipeline.compose_from(rgb, smoothed, options)
+        stem = Path(job["name"]).stem
+        out_path = DONE_DIR / extract_product_id(stem) / (stem + ".jpg")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out_path, "JPEG", quality=95)
+        smoothed.save(alpha_path)   # utrwal wygladzona maske (kolejne edycje od niej)
+        with lock:
+            job["seconds"] = round(time.time() - t0, 1)
+            job["rev"] = (job.get("rev") or 0) + 1
+        persist_jobs()
+        return jsonify({"ok": True, "rev": job["rev"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/jobs/<job_id>/fullbleed-mask")
+def api_fullbleed_mask(job_id):
+    """'Bez ramki' dla zadan BEZ oryginalu ale z MASKA (np. import Affenzahn,
+    gdzie orig=None). Full-bleed recompose z zapisanej maski (compose
+    full_bleed, src_rgb=robocze RGB) - bez modelu, natychmiast. Dla zadan z
+    orig dziala stary retry (BiRefNet)."""
+    from PIL import Image
+    with lock:
+        job = jobs.get(job_id)
+    rgb_path = MASKS_DIR / f"{job_id}.rgb.jpg"
+    alpha_path = MASKS_DIR / f"{job_id}.a.png"
+    if not job or not rgb_path.exists() or not alpha_path.exists():
+        return jsonify({"error": "Brak maski - obrob zdjecie ponownie "
+                                 "(starsze/odtworzone zadania nie maja maski)"}), 404
+    options = parse_options(request.form)
+    try:
+        t0 = time.time()
+        rgb = Image.open(rgb_path).convert("RGB")
+        alpha = Image.open(alpha_path).convert("L")
+        rgba = rgb.convert("RGBA")
+        rgba.putalpha(alpha)
+        opt = {**pipeline.DEFAULTS, **options, "full_bleed": True}
+        img = pipeline.compose(rgba, opt, src_rgb=rgb)
+        stem = Path(job["name"]).stem
+        out_path = DONE_DIR / extract_product_id(stem) / (stem + ".jpg")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out_path, "JPEG", quality=95)
+        with lock:
+            job["seconds"] = round(time.time() - t0, 1)
+            job["rev"] = (job.get("rev") or 0) + 1
+        persist_jobs()
+        return jsonify({"ok": True, "rev": job["rev"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/jobs/<job_id>/clean-sole")
+def api_clean_sole(job_id):
+    """Przycisk 'Wyczysc podeszwe': czysci przebarwienia/otarcia na bialej
+    podeszwie GOTOWEGO zdjecia (frequency separation, bez maski/modelu). Guard
+    w pipeline: dziala tylko na studyjnych (biale tlo), fashion pomija (no-op)."""
+    from PIL import Image
+    with lock:
+        job = jobs.get(job_id)
+        rel = job.get("result") if job else None
+    if not job or job.get("status") != "done" or not rel:
+        return jsonify({"error": "Zdjecie nie jest gotowe"}), 409
+    path = DONE_DIR / rel
+    if not path.exists():
+        return jsonify({"error": "Brak pliku wyniku"}), 404
+    try:
+        t0 = time.time()
+        cleaned = pipeline.clean_sole_stains(Image.open(path).convert("RGB"))
+        cleaned.save(path, "JPEG", quality=95)
+        with lock:
+            job["seconds"] = round(time.time() - t0, 1)
+            job["rev"] = (job.get("rev") or 0) + 1
+        persist_jobs()
+        return jsonify({"ok": True, "rev": job["rev"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.post("/api/jobs/recompose-all")
 def api_recompose_all():
     """Hurtowe przeliczenie WSZYSTKICH gotowych zadan poprawionym pipeline,
@@ -2403,6 +2500,100 @@ def idosell_product_process(product_id):
     return jsonify({"jobs": created, "errors": errors,
                     "kept": skipped, "marked_delete": to_delete,
                     "archive": archive})
+
+
+def _fit_white(im, size: int):
+    """Lifestyle/model: bez wycinania - wpasuj na bialy kwadrat size x size."""
+    from PIL import Image
+    im = im.convert("RGB")
+    w, h = im.size
+    r = min(size / w, size / h)
+    im = im.resize((max(1, int(w * r)), max(1, int(h * r))), Image.LANCZOS)
+    c = Image.new("RGB", (size, size), (255, 255, 255))
+    c.paste(im, ((size - im.width) // 2, (size - im.height) // 2))
+    return c
+
+
+def _affenzahn_job(pid: str, idx: int, final_img, work_rgb, work_alpha,
+                   fashion: bool) -> str:
+    """Tworzy zadanie 'done' z gotowego (skomponowanego) zdjecia Affenzahn.
+    Studyjne: zapisuje maske (rgb+alfa) -> edytor/Podeszwa dzialaja.
+    source='idosell' -> Studio grupuje po produkcie, a wysylka czyta done/."""
+    job_id = uuid.uuid4().hex[:12]
+    name = f"{pid}_{idx}.jpg"
+    rel = f"{pid}/{name}"
+    (DONE_DIR / pid).mkdir(parents=True, exist_ok=True)
+    final_img.convert("RGB").save(DONE_DIR / rel, "JPEG", quality=95)
+    editable = work_rgb is not None and work_alpha is not None
+    if editable:
+        work_rgb.convert("RGB").save(MASKS_DIR / f"{job_id}.rgb.jpg", "JPEG", quality=90)
+        work_alpha.save(MASKS_DIR / f"{job_id}.a.png")
+    with lock:
+        jobs[job_id] = {
+            "id": job_id, "name": name, "status": "done", "result": rel,
+            "error": None, "source": "idosell", "orig": None, "data": None,
+            "options": {}, "seconds": 0, "editable": editable, "rev": 1,
+            "kept": bool(fashion), "fashion": bool(fashion),
+            "qa": {"ok": True, "issues": []},
+        }
+        job_order.append(job_id)
+    return job_id
+
+
+@app.post("/api/idosell/products/<int:product_id>/affenzahn-import")
+def idosell_affenzahn_import(product_id):
+    """Import zdjec producenta (Affenzahn) do Studio wg mapowania:
+    pobiera mastery (2000px), studyjne sklada ICH alfa + NASZ cien, lifestyle
+    (model_*) 1:1 jako fashion; zapis do done/{pid}/ + plan.json (action=
+    process) + zadania done. NIC nie idzie do IdoSell - wysylka jak zwykle
+    przez UI (czyta done/). Zastepuje dotychczasowe zadania produktu."""
+    from io import BytesIO
+
+    from PIL import Image
+    try:
+        items = affenzahn_client.gallery(product_id)
+    except affenzahn_client.AffenzahnError as e:
+        return jsonify({"error": str(e)}), 404
+
+    _reset_product_jobs(product_id)
+    pid = str(product_id)
+    out_dir = DONE_DIR / pid
+    out_dir.mkdir(parents=True, exist_ok=True)
+    opt = {**pipeline.DEFAULTS, "shadow": True, "shadow_mode": "minimal",
+           "mirror": False}
+
+    created, errors, decisions = [], [], []
+    for it in items:
+        idx = it["pos"]
+        try:
+            im = Image.open(BytesIO(affenzahn_client.download(it["url"])))
+        except Exception as e:
+            errors.append(f"{it['kind']}: {e}")
+            continue
+        has_alpha = im.mode in ("RGBA", "LA") or "transparency" in im.info
+        if it["studio"] and has_alpha:
+            rgba = im.convert("RGBA")
+            final = pipeline.compose(pipeline.refine_edges(rgba, 0.5), opt)
+            white = Image.new("RGBA", im.size, (255, 255, 255, 255))
+            white.alpha_composite(rgba)
+            jid = _affenzahn_job(pid, idx, final, white.convert("RGB"),
+                                 rgba.split()[3], fashion=False)
+        else:
+            final = _fit_white(im, int(pipeline.DEFAULTS["size"]))
+            jid = _affenzahn_job(pid, idx, final, None, None, fashion=it["fashion"])
+        created.append(jid)
+        decisions.append({"index": idx, "image_id": None, "slot": idx,
+                          "url": it["url"], "action": "process", "mirror": False,
+                          "fashion": it["fashion"], "icons": []})
+
+    plan = {"product_id": product_id, "source": "idosell", "affenzahn": True,
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"), "decisions": decisions}
+    (out_dir / "plan.json").write_text(
+        json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+    persist_jobs()
+    ido_audit("affenzahn_import", product_id,
+              {"count": len(created), "errors": errors})
+    return jsonify({"jobs": created, "count": len(created), "errors": errors})
 
 
 def _dhash(data: bytes, size: int = 8) -> int:

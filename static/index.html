@@ -916,6 +916,66 @@ async function flipPhoto(jobId) {
   } catch { alert("Błąd połączenia"); }
 }
 
+// "Podeszwa": wygladz postrzepiona ciemna dolna krawedz podeszwy w czysta linie
+// (recompose z zapisanej maski, bez modelu). Per zdjecie, opcjonalne.
+async function smoothSole(jobId, el) {
+  busy(el);
+  try {
+    const res = await api(`/api/jobs/${jobId}/smooth-sole`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); unbusy(el); return; }
+    lastJobsKey = "";   // swiezy rev -> przerysuj miniature
+    refresh();
+  } catch { alert("Błąd połączenia"); unbusy(el); }
+}
+
+// "Wyczysc podeszwe": usun przebarwienia/otarcia z bialej podeszwy gotowego
+// zdjecia (frequency separation, bez maski). Fashion/lifestyle pomijane (guard).
+async function cleanSole(jobId, el) {
+  busy(el);
+  try {
+    const res = await api(`/api/jobs/${jobId}/clean-sole`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); unbusy(el); return; }
+    lastJobsKey = ""; refresh();
+  } catch { alert("Błąd połączenia"); unbusy(el); }
+}
+
+// "Bez ramki" dla zadan bez oryginalu ale z maska (np. Affenzahn) - full-bleed
+// recompose z maski, bez modelu (orig-owe zadania ida starym retryFullBleed)
+async function fullBleedFromMask(jobId, el) {
+  busy(el);
+  try {
+    const res = await api(`/api/jobs/${jobId}/fullbleed-mask`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); unbusy(el); return; }
+    lastJobsKey = ""; refresh();
+  } catch { alert("Błąd połączenia"); unbusy(el); }
+}
+
+// Import zdjec producenta (Affenzahn) wg mapowania - zastepuje karty produktu
+// gotowymi (ich wyciecie + nasz cien / lifestyle 1:1). Bez wysylki do IdoSell.
+async function importAffenzahn(pid, btn) {
+  if (!confirm("Pobrać zdjęcia producenta (Affenzahn) i ZASTĄPIĆ obecne karty tego produktu?\nStudyjne: ich wycięcie + nasz cień. Lifestyle: 1:1. Nic nie idzie do IdoSell - wyślesz osobno przyciskiem.")) return;
+  busy(btn);
+  try {
+    const res = await api(`/api/idosell/products/${pid}/affenzahn-import`, { method: "POST" });
+    const data = await res.json();
+    if (data.error) { alert("Affenzahn: " + data.error); return; }
+    let msg = `Zaimportowano ${data.count} zdjęć z Affenzahn.`;
+    if ((data.errors || []).length) msg += `\nProblemy:\n${data.errors.join("\n")}`;
+    alert(msg);
+    lastJobsKey = ""; refresh();
+  } catch { alert("Błąd połączenia"); }
+  finally { unbusy(btn); }
+}
+
 // podmiana zrodla na lepsze zdjecie z linku (np. wyzsza rozdzielczosc) + re-obrobka
 async function replaceUrl(jobId) {
   const url = prompt("Wklej link (URL) do lepszego zdjęcia TEGO SAMEGO produktu (np. wyższa rozdzielczość):");

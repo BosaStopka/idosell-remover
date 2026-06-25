@@ -75,6 +75,95 @@ def refine_edges(rgba: Image.Image, feather: float) -> Image.Image:
     return Image.merge("RGBA", (r, g, b, a))
 
 
+def smooth_sole_edge(alpha: Image.Image, sigma: float = 7.0,
+                     band_from: float = 0.55) -> Image.Image:
+    """Wygladza DOLNA krawedz maski w czysta linie: przycina wystajace,
+    postrzepione ciemne czubki bieznika do wygladzonej dolnej obwiedni.
+    Tylko PRZYCINANIE (mask &= y<=cutline) - nie zjada bryly, nie dodaje bieli;
+    gora buta (powyzej band_from wysokosci) nietknieta. Uzywane PER ZDJECIE
+    przez przycisk 'Podeszwa' (recompose z zapisanej maski) - NIE globalnie i
+    bez ruszania modelu/segmentacji."""
+    import numpy as np
+    from scipy import ndimage
+    m = np.asarray(alpha.convert("L")) > 128
+    if not m.any():
+        return alpha
+    H, W = m.shape
+    cols = np.arange(W)
+    has = m.any(axis=0)
+    bottom = np.full(W, -1.0)
+    first_from_bottom = np.argmax(m[::-1, :], axis=0)   # od dolu pierwszy fg
+    bottom[has] = (H - 1) - first_from_bottom[has]
+    bottom_i = np.interp(cols, cols[has], bottom[has])  # domknij puste kolumny
+    ys = np.where(m.any(axis=1))[0]
+    y0, y1 = int(ys.min()), int(ys.max())
+    sole_top = y0 + band_from * (y1 - y0)
+    sm = ndimage.gaussian_filter1d(bottom_i, sigma=sigma)
+    cutline = np.minimum(sm, bottom_i)                  # tylko w gore (przytnij)
+    cutline = np.maximum(cutline, sole_top)             # nie wchodz w gore buta
+    yy = np.arange(H)[:, None]
+    keep = m & (yy <= cutline[None, :])
+    out = np.where(yy <= sole_top, m, keep)             # gora nietknieta
+    a = Image.fromarray((out * 255).astype("uint8"), "L")
+    a = a.filter(ImageFilter.GaussianBlur(0.6)).point(
+        lambda v: 0 if v < 110 else 255)
+    return a
+
+
+def clean_sole_stains(im: Image.Image, band=(0.55, 0.86), lum_lo=150,
+                      sigma=22, edge_px=11, color_str=1.0, tone_str=1.0,
+                      dark=34) -> Image.Image:
+    """Czysci przebarwienia/otarcia na BIALEJ podeszwie - frequency separation:
+    (1) desaturacja kolorowego nalotu (faktura/luma zostaje ostra),
+    (2) korekta NISKICH czestotliwosci tonu ku czystej podeszwie (smugi
+        jasnieja, ale wysokie czestotliwosci = tekstura NIE rozmyte).
+    OCHRONA KONTURU: efekt wygaszony do zera przy krawedziach midsole (distance
+    feather) - obrys nietkniety. Zywe kolory (zolty/niebieski sat>=0.38) i
+    ciemny bieznik (lum<lum_lo) poza zasiegiem. Operuje na GOTOWYM zdjeciu
+    (bez maski). Gdy za malo czystej podeszwy -> zwraca oryginal (no-op)."""
+    import numpy as np
+    from scipy import ndimage
+    arr = np.asarray(im.convert("RGB")).astype(np.float32)
+    H, W = arr.shape[:2]
+    # GUARD: tylko studyjne na BIALYM tle (produkt). Fashion/lifestyle (kolorowe
+    # tlo) pomijamy - inaczej "podeszwa" zlapie jasne dzinsy/deski itp.
+    c = max(4, int(min(H, W) * 0.06))
+    corners = [arr[:c, :c], arr[:c, -c:], arr[-c:, :c], arr[-c:, -c:]]
+    if min(float((p >= 244).all(axis=2).mean()) for p in corners) < 0.85:
+        return im
+    R, G, B = arr[..., 0], arr[..., 1], arr[..., 2]
+    lum = 0.299 * R + 0.587 * G + 0.114 * B
+    mx, mn = arr.max(2), arr.min(2)
+    sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1.0), 0.0)
+    yy = np.arange(H)[:, None]
+    midsole = ((yy > band[0] * H) & (yy < band[1] * H)
+               & (lum > lum_lo) & (lum < 248))
+    midsole = ndimage.binary_closing(midsole, iterations=2)
+    region = midsole & (sat < 0.38)                       # chron zywe kolory
+    clean = region & (sat < 0.05) & (lum > 185)
+    if int(clean.sum()) < 400:                            # brak czystej podeszwy
+        return im
+    feather = np.clip(ndimage.distance_transform_edt(region) / edge_px, 0, 1)
+    # 1. KOLOR: desaturacja przebarwien (faktura zostaje)
+    cw = ndimage.gaussian_filter(
+        region.astype(np.float32) * np.clip(sat / 0.10, 0, 1) * color_str * feather,
+        1.0)[..., None]
+    neutral = np.repeat(lum[..., None], 3, axis=2)
+    a2 = arr * (1 - cw) + neutral * cw
+    # 2. TON: korekta niskich czestotliwosci ku czystemu (bez rozmycia faktury)
+    src = clean.astype(np.float32)
+    den = ndimage.gaussian_filter(src, sigma) + 1e-6
+    clean_lum = ndimage.gaussian_filter(lum * src, sigma) / den
+    a2_lum = 0.299 * a2[..., 0] + 0.587 * a2[..., 1] + 0.114 * a2[..., 2]
+    low = ndimage.gaussian_filter(a2_lum, sigma)
+    corr = clean_lum - low
+    tw = ndimage.gaussian_filter(
+        region.astype(np.float32) * np.clip(corr / dark, 0, 1) * tone_str * feather,
+        1.5)
+    out = a2 + (corr * tw)[..., None]
+    return Image.fromarray(np.clip(out, 0, 255).astype("uint8"), "RGB")
+
+
 def _shadow_layer(alpha, size, obj_x, obj_y, obj_h, offset_frac, blur, opacity):
     offset = max(4, int(obj_h * offset_frac))
     layer = Image.new("L", size, 0)
