@@ -22,12 +22,13 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 
 from flask import (Flask, jsonify, make_response, request, send_file,
                    send_from_directory)
 
 import allegro_bridge
+import affenzahn_client
 import allegro_client
 import idosell_client
 import pipeline
@@ -48,14 +49,24 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 jobs = {}          # job_id -> dict(status, name, result, error, ...)
 job_order = []     # kolejnosc dodania
-queue = Queue()
+queue = Queue()            # bulk (masowka) - wstrzymywany pauza
+priority_queue = Queue()   # interaktywne (Ponow/Obrob/dodaj/upload) - ZAWSZE, tez przy pauzie
 lock = threading.Lock()
 inference_busy = threading.Event()  # gdy ustawione, skan tla pauzuje
 low_ram_pause = threading.Event()   # obrobka wstrzymana - za malo RAM
+process_paused = threading.Event()  # RECZNA pauza obrobki (user) - zwalnia CPU, kolejka zostaje
 MIN_RAM_GB = 1.2                    # prog wstrzymania obrobki
 LOWRES_MAX_PX = 800                 # zrodlo ponizej tego (dluzszy bok) = "male zrodlo"
 JOB_TIMEOUT_S = 600                 # watchdog: zadanie dluzsze = uznane za zawieszone
 #                                     (zdrowa maszyna ~30s; 600s tylko realne zawieszki)
+
+# --- async kolejka wysylki na Allegro (tlo). OSOBNY lock = izolacja od rdzenia
+# obrobki; nie rusza synchronicznej sciezki /bridge/execute (ta zostaje rdzeniem). ---
+send_queue = Queue()
+send_lock = threading.Lock()
+send_records = {}                   # product_id(str) -> rekord {ido:{}, allegro:{}, state}
+SENDS_STATE_FILE = BASE / "allegro_sends.json"
+SEND_THROTTLE_S = 1.5               # tempo PRODUKTOW (bg robi backoff 429 per wariant)
 
 
 def free_ram_gb() -> float:
@@ -152,14 +163,35 @@ def persist_jobs():
     with lock:
         snapshot = [{k: jobs[jid].get(k) for k in PERSIST_KEYS}
                     for jid in job_order]
+    # GUARD: nie nadpisuj niepustego stanu pustym. Nie ma masowego "wyczysc"
+    # (stop tylko oznacza queued->error, job_order zostaje), wiec pusty
+    # snapshot przy niepustym pliku = wpadka/wyscig - kiedys wymazalo
+    # ~5000 zadan. Lepiej zostawic stary stan niz go skasowac.
+    if not snapshot and JOBS_STATE_FILE.exists():
+        try:
+            existing = json.loads(JOBS_STATE_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = None
+        if existing:
+            print(f"persist_jobs: pomijam zapis [] na niepusty stan "
+                  f"({len(existing)} zadan) - guard")
+            return
     try:
         JOBS_STATE_FILE.write_text(
             json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+        # kopia ostatniego niepustego stanu jako siatka bezpieczenstwa
+        if snapshot:
+            JOBS_STATE_FILE.with_suffix(".json.bak").write_text(
+                json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
     except OSError:
         pass
 
 
-def submit_job(name: str, data: bytes, options: dict, source: str = "upload") -> str:
+def submit_job(name: str, data: bytes, options: dict, source: str = "upload",
+               priority: bool = True) -> str:
+    # priority=True (domyslnie) = interaktywne (upload/Ponow/Obrob jeden produkt/
+    # dodaj zdjecie) -> kolejka priorytetowa, leci ZAWSZE (tez przy pauzie).
+    # bulk (_ido_process_default/feeder) wola z priority=False.
     job_id = uuid.uuid4().hex[:12]
     ext = Path(name).suffix or ".jpg"
     orig_file = f"{job_id}{ext}"
@@ -178,7 +210,7 @@ def submit_job(name: str, data: bytes, options: dict, source: str = "upload") ->
             "error": None, "source": source, "orig": orig_file,
         }
         job_order.append(job_id)
-    queue.put(job_id)
+    (priority_queue if priority else queue).put(job_id)
     persist_jobs()
     return job_id
 
@@ -290,7 +322,19 @@ def qa_check(out_img, alpha, full_bleed: bool) -> dict:
 
 def worker():
     while True:
-        job_id = queue.get()
+        # PRIORYTET: interaktywne (upload/Ponow/Obrob jeden produkt/dodaj) leca
+        # ZAWSZE - tez przy pauzie. BULK (masowka) tylko gdy NIE zapauzowane.
+        # Dzieki temu pauza zwalnia CPU na prace, a Twoje reczne i tak sie obrabia.
+        try:
+            job_id = priority_queue.get_nowait()
+        except Empty:
+            if process_paused.is_set():
+                time.sleep(0.5)
+                continue                  # bulk wstrzymany - czekaj na priorytet/wznow
+            try:
+                job_id = queue.get(timeout=1)
+            except Empty:
+                continue
         # przy krytycznie malym RAM czekaj zamiast mlocic skazane proby
         # (thrashing/bad_alloc zawieszal caly serwer)
         while free_ram_gb() < MIN_RAM_GB:
@@ -444,19 +488,50 @@ def api_system():
 
 @app.get("/api/jobs")
 def api_jobs():
+    # FILTR (skalowanie: przy ~8000 zadan zwracaj tylko podzbior, nie cale).
+    # Studio domyslnie pyta ?active=1 (tylko w trakcie) albo z filtrem
+    # (?series/?season/?category/?pid); "Zaladuj wszystko" -> bez parametrow.
+    f_active = request.args.get("active")
+    f_light = request.args.get("light")   # wszystko OPROCZ masowego idosell+done
+    f_pid = request.args.get("pid")
+    f_series = request.args.get("series")
+    f_season = request.args.get("season")
+    f_category = request.args.get("category")
+    content_filter = bool(f_pid or f_series or f_season or f_category)
+    pid_meta = _ido_series_pid_meta()   # z cache indeksu serii (jesli jest)
+
+    def _keep(j):
+        if f_active and j.get("status") not in ("queued", "processing"):
+            return False
+        if f_light and j.get("source") == "idosell" and j.get("status") == "done":
+            return False   # masowy balast (obrobione IdoSell) tylko przez filtr
+        if not content_filter:
+            return True
+        pid = extract_product_id(Path(j.get("name", "")).stem)
+        if f_pid:
+            return pid == f_pid
+        meta = pid_meta.get(pid) or {}
+        if f_series and str(meta.get("series_id")) != str(f_series):
+            return False
+        if f_season and f_season not in (meta.get("season") or []):
+            return False
+        if f_category and f_category not in (meta.get("category") or []):
+            return False
+        return True
+
     with lock:
         out = []
         for jid in job_order:
             j = jobs[jid]
+            if not _keep(j):
+                continue
             out.append({k: j.get(k) for k in
                         ("id", "name", "status", "result", "error",
                          "source", "orig", "seconds", "editable", "qa", "rev",
                          "kept", "fashion", "dup", "dup_keep")})
     # wzbogac zadania IdoSell o pid/index/ikony z planu + kategoria/sezon/seria
-    # i flage 'wyslane' - SERWEROWO, zeby Studio mialo dane do badge'y i filtrow
-    # niezaleznie od idoMeta (ktore znika po odswiezeniu strony).
+    # (tylko podzbior 'out' -> tanio). pid_meta juz policzone wyzej.
     plan_cache = {}
-    pid_meta = _ido_series_pid_meta()   # z cache indeksu serii (jesli jest)
     for o in out:
         if o.get("source") != "idosell" or o.get("status") != "done":
             continue
@@ -529,7 +604,8 @@ def api_queue():
     remaining = queued + len(proc)
     eta = int(remaining * med) if (med and remaining) else None
     return jsonify({"queued": queued, "processing": len(proc), "current": cur,
-                    "median_seconds": med, "remaining": remaining, "eta_seconds": eta})
+                    "median_seconds": med, "remaining": remaining, "eta_seconds": eta,
+                    "paused": process_paused.is_set()})
 
 
 @app.post("/api/clear")
@@ -577,7 +653,7 @@ def api_retry(job_id):
             options["mirror"] = bool((job.get("options") or {}).get("mirror"))
         job.update(status="queued", error=None, result=None,
                    seconds=None, options=options, data=None)
-    queue.put(job_id)
+    priority_queue.put(job_id)   # Ponow = interaktywne -> priorytet (tez przy pauzie)
     persist_jobs()
     return jsonify({"job": job_id})
 
@@ -733,7 +809,7 @@ def _replace_job_image(job_id, content):
         job.update(status="queued", error=None, result=None, seconds=None,
                    data=None, options=options)
         job["src_w"], job["src_h"] = w, h
-    queue.put(job_id)
+    priority_queue.put(job_id)   # podmiana zrodla = interaktywne -> priorytet
     persist_jobs()
     return jsonify({"ok": True, "w": w, "h": h})
 
@@ -772,11 +848,12 @@ def api_replace_file(job_id):
 @app.post("/api/jobs/stop")
 def api_jobs_stop():
     """Anuluje wszystkie zadania w kolejce (biezace dokonczy sie samo)."""
-    while True:
-        try:
-            queue.get_nowait()
-        except Exception:
-            break
+    for q in (queue, priority_queue):   # oproznij obie kolejki
+        while True:
+            try:
+                q.get_nowait()
+            except Exception:
+                break
     canceled = 0
     with lock:
         for jid in job_order:
@@ -788,6 +865,18 @@ def api_jobs_stop():
                 canceled += 1
     persist_jobs()
     return jsonify({"canceled": canceled})
+
+
+@app.post("/api/queue/pause")
+def api_queue_pause():
+    """Reczna pauza/wznowienie obrobki. paused=true: worker konczy biezace zdjecie,
+    potem czeka (CPU wolne), kolejka zachowana. paused=false: leci dalej."""
+    body = request.get_json(silent=True) or {}
+    if body.get("paused"):
+        process_paused.set()
+    else:
+        process_paused.clear()
+    return jsonify({"paused": process_paused.is_set()})
 
 
 @app.get("/done/<path:relpath>")
@@ -2459,7 +2548,8 @@ def _ido_process_default(product_id: int, options: dict) -> dict:
                           "icons": ["shop", "group", "auction"] if i == 0 else []})
         if action == "process" and data:
             jid = submit_job(f"{product_id}_{i + 1}.jpg", data,
-                             {**options, "mirror": False}, source="idosell")
+                             {**options, "mirror": False}, source="idosell",
+                             priority=False)   # BULK (masowka/feeder) -> wstrzymywany pauza
             dup_entries.append((jid, i + 1, data))
             jobs_made += 1
         elif action == "keep" and data:

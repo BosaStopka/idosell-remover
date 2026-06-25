@@ -65,7 +65,7 @@
     box-shadow: var(--shadow-sm);
   }
   main {
-    max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px;
+    max-width: min(2200px, 97vw); margin: 0 auto; padding: 28px 24px 60px;
   }
   .layout { display: grid; grid-template-columns: 340px 1fr; gap: 24px; }
   @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
@@ -529,8 +529,10 @@
         <button class="btn btn-ghost" id="clearBtn">🧹 Wyczyść zakończone</button>
         <button class="btn btn-ghost" onclick="collapseAll(true)" title="Zwiń wszystkie produkty (przy dużej liczbie - łatwiejsza nawigacja)">▸ Zwiń wszystkie</button>
         <button class="btn btn-ghost" onclick="collapseAll(false)" title="Rozwiń wszystkie produkty">▾ Rozwiń wszystkie</button>
+        <button class="btn btn-ghost" id="studioLoadAll" onclick="toggleStudioAll()" style="color:#a29bfe;border-color:#3a3470" title="Domyślnie Studio pokazuje tylko 'w trakcie' i wgrane ręcznie (~8000 obrobionych IdoSell ukrytych dla szybkości - inaczej czarne tło). Ten przycisk ładuje CAŁĄ listę naraz (może chwilę mulić). Szybciej: wybierz Model/Kategorię/Sezon u góry.">📂 Załaduj wszystko</button>
         <button class="btn btn-ghost" id="studioSelectAll" title="Zaznacz wszystkie produkty IdoSell widoczne w Studio (do zbiorczej obróbki ponownej / wysyłki)">☑ Zaznacz wszystkie</button>
         <button class="btn btn-ghost" id="recomposeAllBtn" title="Zastosuj poprawiony pipeline (np. korekta bieli) do wszystkich obrobionych - bez modelu, z masek. NIE naprawia koloru Adobe RGB (do tego: Obrób ponownie). Nadpisuje wyniki lokalnie.">♻ Przelicz ponownie (bez modelu)</button>
+        <button class="btn btn-ghost hidden" id="pauseBtn" style="color:#ffd166;border-color:#ffd166" title="Wstrzymaj obróbkę (zwalnia CPU do innej pracy) - kolejka zostaje, wznowisz kiedy chcesz, np. w nocy">⏸ Pauza</button>
         <button class="btn btn-ghost hidden" id="stopBtn" style="color:var(--err);border-color:var(--err)">⏹ Stop kolejki</button>
       </div>
       <div class="toolbar">
@@ -558,6 +560,7 @@
         <select id="studioSeriesSel" title="Filtr po modelu (serii) - lista z aktualnych produktów" style="font-size:12px">
           <option value="">Model: wszystkie</option>
         </select>
+        <input id="studioSeriesText" placeholder="Marka/seria, np. Froddo" title="Filtr po nazwie serii (marka) - wpisz fragment, np. Froddo, zostaną wszystkie serie tej marki" style="font-size:12px;padding:5px 8px;border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--text);width:150px">
       </div>
       <div id="cards"><div class="empty">Dodaj zdjęcia, aby zacząć</div></div>
       <!-- plywajacy CTA: jezdzi przy scrollu, chowa sie gdy zakladka nieaktywna
@@ -1015,9 +1018,11 @@ goBtn.addEventListener("click", async () => {
 });
 $("qaOnly").addEventListener("change", e => { qaOnly = e.target.checked; render(); });
 $("hideSent").addEventListener("change", e => { hideSent = e.target.checked; render(); });
+$("sendsSearch").addEventListener("input", e => { sendsSearch = e.target.value; renderSends(); });
+$("studioSeriesText").addEventListener("input", e => { studioSeriesText = e.target.value.trim().toLowerCase(); studioRefilter(); });
 $("lowOnly").addEventListener("change", e => { lowOnly = e.target.checked; render(); });
-$("studioCat").addEventListener("change", e => { studioCat = e.target.value; render(); });
-$("studioSeason").addEventListener("change", e => { studioSeason = e.target.value; render(); });
+$("studioCat").addEventListener("change", e => { studioCat = e.target.value; studioRefilter(); });
+$("studioSeason").addEventListener("change", e => { studioSeason = e.target.value; studioRefilter(); });
 $("studioSeriesSel").addEventListener("change", e => {
   if (e.target.value) setStudioSeries(e.target.value, e.target.options[e.target.selectedIndex].text);
   else clearStudioSeries();
@@ -1027,26 +1032,33 @@ $("stopBtn").addEventListener("click", async () => {
   const data = await res.json();
   if (data.canceled) refresh();
 });
+$("pauseBtn").addEventListener("click", async () => {
+  const wantPause = $("pauseBtn").textContent.includes("Pauza");   // teraz "Pauza" -> chcemy wstrzymac
+  try {
+    await api("/api/queue/pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused: wantPause }) });
+  } catch {}
+  queueStatus();
+});
 
 async function levelColors(pid, btn) {
-  btn.disabled = true; btn.textContent = "Analiza...";
+  busy(btn);
   let data;
   try {
     const res = await api(`/api/groups/${encodeURIComponent(pid)}/colors`);
     data = await res.json();
   } catch { data = { error: "Błąd połączenia" }; }
-  btn.disabled = false; btn.textContent = "🎨 Wyrównaj barwy";
+  unbusy(btn);
   if (data.error) { alert(data.error); return; }
   if (!data.outliers) { alert("Wszystkie zdjęcia mają spójną tonację - nic do poprawy."); return; }
   const lines = data.photos.map(p =>
     `${p.outlier ? "➤" : "  "} ${p.name}  (odchyłka ${p.dist})${p.outlier ? "  <- DO KOREKTY" : ""}`);
   if (!confirm(`Analiza tonacji grupy ${pid}:\n\n${lines.join("\n")}\n\nSkorygować ${data.outliers} odstających zdjęć do tonacji większości?\n\nUwaga: zdjęcie INNEGO elementu (np. samych wkładek czy podeszwy) może odstawać naturalnie - jeśli takie jest na liście, rozważ anulowanie. Korekta ma limit siły, cofnięcie: ↻ Ponów na zdjęciu.`)) return;
-  btn.disabled = true; btn.textContent = "Korekta...";
+  busy(btn);
   try {
     const res = await api(`/api/groups/${encodeURIComponent(pid)}/colors/apply`, { method: "POST" });
     data = await res.json();
   } catch { data = { error: "Błąd połączenia" }; }
-  btn.disabled = false; btn.textContent = "🎨 Wyrównaj barwy";
+  unbusy(btn);
   if (data.error) { alert(data.error); return; }
   lastJobsKey = "";
   refresh();
@@ -1321,19 +1333,23 @@ $("recomposeAllBtn").addEventListener("click", async () => {
 let polling = null, lastJobs = [], lastJobsKey = "", hadActiveAllegro = false,
     hadActiveIdo = false;
 async function refresh() {
+  // globalny "czy cos sie obrabia" z LEKKIEGO /api/queue - niezalezny od filtra
+  // Studio (ktory moze zwracac maly podzbior). Steruje stopBtn + pollingiem.
+  let globalActive = false;
+  try { const q = await (await api("/api/queue")).json(); globalActive = (q.queued + q.processing) > 0; } catch {}
+
   let fresh;
   try {
-    const res = await api("/api/jobs");
+    const res = await api(studioJobsUrl());   // podzbior wg filtra / active / all
     fresh = await res.json();
   } catch { return; }
-  const key = JSON.stringify(fresh);
-  if (key !== lastJobsKey) {       // przerysuj tylko gdy cos sie zmienilo
+  const key = studioJobsUrl() + "|" + JSON.stringify(fresh);
+  if (key !== lastJobsKey) {       // przerysuj tylko gdy cos sie zmienilo (lub zmiana filtra)
     lastJobsKey = key;
     lastJobs = fresh;
     render();
   }
-  const active = fresh.some(j => j.status === "queued" || j.status === "processing");
-  $("stopBtn").classList.toggle("hidden", !active);
+  $("stopBtn").classList.toggle("hidden", !globalActive);
   const activeAllegro = fresh.some(j => j.source === "allegro" &&
     (j.status === "queued" || j.status === "processing"));
   const activeIdo = fresh.some(j => j.source === "idosell" &&
@@ -1358,10 +1374,39 @@ const STATUS = {
 };
 
 const QA_LBL = { tlo: "tło", maly: "za mały", proporcje: "proporcje", fragmenty: "fragmenty", pusta: "pusta maska" };
-let qaOnly = false, hideSent = false, studioCat = "", studioSeason = "", lowOnly = false;
+let qaOnly = false, hideSent = false, studioCat = "", studioSeason = "", lowOnly = false, studioShowAll = false;
 let studioSeries = "", studioSeriesName = "";   // filtr po serii (modelu) w Studio
-function setStudioSeries(id, name) { studioSeries = String(id); studioSeriesName = name || ("seria " + id); render(); }
-function clearStudioSeries() { studioSeries = ""; studioSeriesName = ""; render(); }
+let studioSeriesText = "";                       // filtr tekstowy po nazwie serii (marka, np. Froddo)
+// zakladka "Do sprawdzenia" (async wysylki)
+let sendsData = { items: [], stats: {}, sent_ids: [] };
+let sentIdSet = new Set();
+let sendsFilter = "problems";
+let sendsSearch = "";
+let expandedSends = new Set();   // recznie rozwiniete OK-wiersze (przezywa odswiezenie)
+let lastSendsKey = "";           // re-render zakladki tylko gdy dane sie zmienia
+function setStudioSeries(id, name) { studioSeries = String(id); studioSeriesName = name || ("seria " + id); studioRefilter(); }
+function clearStudioSeries() { studioSeries = ""; studioSeriesName = ""; studioRefilter(); }
+// === SKALOWANIE: domyslnie pobieramy tylko podzbior (filtr) albo same 'w
+// trakcie'; "Zaladuj wszystko" -> pelna lista. Inaczej /api/jobs ciagnie
+// ~8000 zadan co 1.5s i dlawi serwer (czarne tlo). ===
+function studioJobsUrl() {
+  if (studioShowAll) return "/api/jobs";
+  if (studioSeries) return "/api/jobs?series=" + encodeURIComponent(studioSeries);
+  if (studioSeason) return "/api/jobs?season=" + encodeURIComponent(studioSeason);
+  if (studioCat) return "/api/jobs?category=" + encodeURIComponent(studioCat);
+  if (studioSeriesText) return "/api/jobs";   // szukanie po tekscie -> pelny zbior
+  return "/api/jobs?light=1";                  // domyslnie: bez masowego balastu (idosell+done)
+}
+function studioIsLight() {
+  return !studioShowAll && !studioSeries && !studioSeason && !studioCat && !studioSeriesText;
+}
+function studioRefilter() { lastJobsKey = ""; refresh(); }
+function toggleStudioAll() {
+  studioShowAll = !studioShowAll;
+  const b = $("studioLoadAll");
+  if (b) b.textContent = studioShowAll ? "📂 Pokaż wybrane" : "📂 Załaduj wszystko";
+  studioRefilter();
+}
 const collapsedGroups = new Set();
 // pid -> {code, executed} z przegladarki produktow (Studio grupuje po numerycznym
 // ID; SKU/kod i status 'wyslane' bierzemy stad, jesli produkt byl wczytany)
@@ -1408,6 +1453,16 @@ function render() {
         <span class="card-name">${esc(p.file.name)}</span>
         <span class="badge">Do przetworzenia</span>
       </div></div>`;
+  }
+  // SKALOWANIE: w trybie domyslnym (nic nie wybrano) pokazujemy tylko 'w
+  // trakcie' + wgrane recznie; ~8000 obrobionych IdoSell chowamy za filtr.
+  // Banner zaprasza do wyboru filtra albo "Zaladuj wszystko".
+  if (studioIsLight()) {
+    html += `<div class="empty" style="grid-column:1/-1;text-align:center;padding:26px 20px;line-height:1.7;border:1px dashed var(--border);border-radius:14px;margin-bottom:4px">
+      <div style="font-size:14px;color:var(--text);margin-bottom:4px">Widać tylko <b>w trakcie</b> i <b>wgrane ręcznie</b>. Obrobione produkty IdoSell są ukryte (dla szybkości).</div>
+      <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Wybierz <b>Model / Kategorię / Sezon</b> u góry, żeby je zobaczyć - albo załaduj całą listę (bywa duża, może chwilę mulić).</div>
+      <button class="btn btn-ghost" onclick="toggleStudioAll()" style="font-size:13px">📂 Załaduj wszystko</button>
+    </div>`;
   }
   // grupowanie zadan po produkcie/ofercie
   const pidOf = name => {
@@ -2939,8 +2994,20 @@ ramStatus();
 async function queueStatus() {
   let q;
   try { const r = await api("/api/queue"); q = await r.json(); } catch { return; }
+  const pb = $("pauseBtn");
+  if (pb) {
+    pb.classList.toggle("hidden", !q.remaining);
+    pb.textContent = q.paused ? "▶ Wznów" : "⏸ Pauza";
+    pb.style.color = q.paused ? "var(--ok)" : "#ffd166";
+    pb.style.borderColor = q.paused ? "var(--ok)" : "#ffd166";
+  }
   const el = $("queueBadge");
   if (!q.remaining) { el.classList.add("hidden"); return; }
+  if (q.paused) {
+    el.textContent = `⏸ wstrzymane: ${q.remaining} w kolejce`;
+    el.style.color = "#ffd166"; el.style.border = "1px solid #ffd166";
+    el.classList.remove("hidden"); return;
+  }
   const e = q.eta_seconds;
   const eta = e == null ? "" :
     e >= 3600 ? ` · ~${Math.round(e / 360) / 10} h do końca` :
