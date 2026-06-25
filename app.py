@@ -2917,6 +2917,17 @@ def idosell_plan_curate(product_id):
         return jsonify({"error": "Nie ma takiego zdjecia w planie"}), 404
     op = request.form.get("op")
     if op == "move":
+        # RECZNE przestawienie = przejmij kontrole nad kolejnoscia. Reifikujemy
+        # aktualny widok galerii do SUROWEJ kolejnosci i przelaczamy na 'raw' -
+        # inaczej gallery_ordered parkowal fashion z powrotem na poz.2 ("dalej
+        # trzyma poz.2 bo bylo fashion") i przesuniecie nie dzialalo. Dodatkowo
+        # zdejmujemy flage fashion z przesuwanego zdjecia. Nic nie skacze, bo
+        # reifikacja zachowuje to, co widac.
+        mode = plan.get("gallery_order", "fashion_second")
+        decs = gallery.gallery_ordered(decs, mode)
+        plan["gallery_order"] = "raw"
+        pos = next((i for i, d in enumerate(decs) if d.get("index") == idx), pos)
+        decs[pos]["fashion"] = False
         new = pos + (request.form.get("dir", type=int) or 0)
         if 0 <= new < len(decs):
             decs[pos], decs[new] = decs[new], decs[pos]
