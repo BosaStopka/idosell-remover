@@ -577,9 +577,9 @@
       </div>
       <div class="toolbar">
         <label class="qa-filter"><input type="checkbox" id="qaOnly"> ⚠ Tylko z uwagami QA</label>
-        <label class="qa-filter"><input type="checkbox" id="hideSent"> 🙈 Ukryj wysłane</label>
+        <label class="qa-filter"><input type="checkbox" id="hideSent" checked> 🙈 Ukryj wysłane</label>
         <label class="qa-filter"><input type="checkbox" id="lowOnly"> ⚠ Tylko małe źródło</label>
-        <label class="qa-filter" title="Pokaż tylko produkty ze stanem magazynowym (dostępne w sklepie). Niedostępne i tak się nie sprzedają - nie ma sensu ich obrabiać ani wrzucać."><input type="checkbox" id="studioAvailOnly"> 📦 Tylko ze stanem</label>
+        <label class="qa-filter" title="Pokaż tylko produkty ze stanem magazynowym (dostępne w sklepie). Niedostępne i tak się nie sprzedają - nie ma sensu ich obrabiać ani wrzucać."><input type="checkbox" id="studioAvailOnly" checked> 📦 Tylko ze stanem</label>
         <select id="studioCat" title="Filtr po kategorii (Rodzaj z IdoSell)" style="font-size:12px">
           <option value="">Kategoria: wszystkie</option>
           <option value="sandały">sandały</option>
@@ -1653,7 +1653,7 @@ const STATUS = {
 };
 
 const QA_LBL = { tlo: "tło", maly: "za mały", proporcje: "proporcje", fragmenty: "fragmenty", pusta: "pusta maska" };
-let qaOnly = false, hideSent = false, studioCat = "", studioSeason = "", lowOnly = false, studioShowAll = false;
+let qaOnly = false, hideSent = true, studioCat = "", studioSeason = "", lowOnly = false, studioShowAll = false;
 let studioSeries = "", studioSeriesName = "";   // filtr po serii (modelu) w Studio
 let studioSeriesText = "";                       // filtr tekstowy po nazwie serii (marka, np. Froddo)
 // zakladka "Do sprawdzenia" (async wysylki)

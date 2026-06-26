@@ -3823,6 +3823,19 @@ restore_sends()
 threading.Thread(target=send_worker, daemon=True).start()
 
 
+# pre-warm cache dostepnych pid: filtr "tylko ze stanem" jest domyslny w Studio,
+# wiec pierwsze /api/jobs?avail=y nie powinno czekac na skan. W tle - nie blokuje
+# startu; gdy cache (_avail_pids.json) jeszcze swiezy, to tani odczyt z pliku.
+def _prewarm_avail():
+    try:
+        get_available_pids()
+    except Exception:
+        pass
+
+
+threading.Thread(target=_prewarm_avail, daemon=True).start()
+
+
 def _send_problem(rec) -> bool:
     if rec.get("reviewed"):
         return False
