@@ -2853,10 +2853,12 @@ function edStroke(from, to) {
   c.lineWidth = ed.size;
   c.lineCap = "round";
   c.lineJoin = "round";
-  c.beginPath();
+  c.filter = "blur(1.5px)";   // miekka krawedz TYLKO pedzla (lokalnie) - bez ostrych
+  c.beginPath();              // pikseli, ale NIE rozmywa reszty maski (to robil compose_from)
   c.moveTo(from.x, from.y);
   c.lineTo(to.x, to.y);
   c.stroke();
+  c.filter = "none";
 }
 
 // podglad pedzla: kolko pod kursorem o rozmiarze pedzla (w px ekranu, z zoomem)

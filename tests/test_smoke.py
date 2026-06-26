@@ -94,23 +94,18 @@ def test_compose_small_source_fills_to_padding():
     assert fill > 0.85, f"male zrodlo ma wypelnic ~padding (0.90), jest {fill:.0%}"
 
 
-def test_compose_from_smooths_and_returns_canvas():
-    # edytor maski: compose_from wygladza alfe (gaussian) zamiast zostawiac
-    # twarde piksele pedzla. Smoke: twarda maska -> output ma na krawedzi
-    # wartosci POSREDNIE (blend z biala), nie tylko 2 czyste poziomy.
+def test_compose_from_returns_canvas():
+    # compose_from sklada maske 1:1 (BEZ globalnego rozmycia - to rozmazywalo
+    # kontur calego produktu; wygladzenie robi teraz pedzel w edytorze lokalnie).
     import numpy as np
     from PIL import Image
     import pipeline
     rgb = Image.new("RGB", (300, 300), (150, 90, 40))
     a = np.zeros((300, 300), "uint8")
-    a[60:240, 60:240] = 255          # twardy kwadrat (ostra krawedz)
+    a[60:240, 60:240] = 255
     out = pipeline.compose_from(rgb, Image.fromarray(a, "L"),
                                 {"shadow": False, "size": 300})
     assert out.size == (300, 300)
-    arr = np.asarray(out.convert("L"))
-    mid = set(int(v) for v in arr.flatten())
-    soft = [v for v in mid if 60 < v < 240]   # piksele posrednie = miekka krawedz
-    assert soft, "compose_from powinno dac miekka (antyaliasowana) krawedz"
 
 
 def test_clean_sole_studio_vs_fashion():
