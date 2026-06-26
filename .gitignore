@@ -13,6 +13,7 @@ server_out.log
 server_err.log
 sku_index.json
 series_index.json
+_avail_pids.json
 idosell_audit.jsonl
 allegro_audit.jsonl
 done/

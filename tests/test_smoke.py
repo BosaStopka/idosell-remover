@@ -193,3 +193,19 @@ def test_new_job_endpoints_registered(server, ep):
                     cookies={"bs_auth_ido": _cookie()}, timeout=8)
     assert r.status_code == 404 and "error" in r.json(), \
         f"endpoint {ep} powinien byc zarejestrowany (JSON 404, nie route-404)"
+
+
+def test_queue_drop_unavailable_registered(server):
+    # GET na POST-endpoint -> 405 (zarejestrowany), bez efektow ubocznych (nie czysci)
+    r = server.get(f"{API}/api/idosell/queue-drop-unavailable",
+                   cookies={"bs_auth_ido": _cookie()}, timeout=8)
+    assert r.status_code == 405, "queue-drop-unavailable powinien byc zarejestrowany (POST)"
+
+
+def test_jobs_avail_filter_subset(server):
+    # filtr 'tylko dostepne' = podzbior zadan (nie wiekszy). Skan dostepnych cache'owany.
+    ck = {"bs_auth_ido": _cookie()}
+    active = server.get(f"{API}/api/jobs?active=1", cookies=ck, timeout=30).json()
+    av = server.get(f"{API}/api/jobs?active=1&avail=y", cookies=ck, timeout=90).json()
+    assert isinstance(av, list) and len(av) <= len(active), \
+        "avail=y nie moze zwrocic wiecej zadan niz bez filtra"

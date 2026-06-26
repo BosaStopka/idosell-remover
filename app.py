@@ -508,14 +508,27 @@ def api_jobs():
     f_series = request.args.get("series")
     f_season = request.args.get("season")
     f_category = request.args.get("category")
+    f_avail = request.args.get("avail")   # 'y' -> tylko produkty ze stanem
     content_filter = bool(f_pid or f_series or f_season or f_category)
     pid_meta = _ido_series_pid_meta()   # z cache indeksu serii (jesli jest)
+    # zbior dostepnych tylko gdy filtr 'tylko dostepne' wlaczony; blad skanu ->
+    # None = nie filtruj (lepiej pokazac za duzo niz omylkowo ukryc wszystko)
+    avail_set = None
+    if f_avail == "y":
+        try:
+            avail_set = get_available_pids()
+        except idosell_client.IdoSellError:
+            avail_set = None
 
     def _keep(j):
         if f_active and j.get("status") not in ("queued", "processing"):
             return False
         if f_light and j.get("source") == "idosell" and j.get("status") == "done":
             return False   # masowy balast (obrobione IdoSell) tylko przez filtr
+        if avail_set is not None:
+            pid = extract_product_id(Path(j.get("name", "")).stem)
+            if pid not in avail_set:
+                return False
         if not content_filter:
             return True
         pid = extract_product_id(Path(j.get("name", "")).stem)
@@ -2257,6 +2270,86 @@ def _ido_series_pid_meta() -> dict:
             m = {}
         _SERIES_PID_META.update(mtime=mt, map=m)
     return _SERIES_PID_META["map"]
+
+
+AVAIL_PIDS_FILE = BASE / "_avail_pids.json"
+AVAIL_PIDS_TTL = 1800  # 30 min - dostepnosc zmienia sie czesciej niz serie
+_avail_cache = {"at": 0, "pids": None}
+
+
+def get_available_pids(refresh: bool = False) -> set:
+    """Zbior productId (str) aktywnych i DOSTEPNYCH (productIsAvailable=y).
+    Uzywany przez filtr 'tylko dostepne' w Studio i czyszczenie kolejki z
+    niedostepnych. Lekki skan (returnElements tylko 'code'), cache w pamieci +
+    plik, TTL 30 min. Niedostepny = aktywny pid spoza tego zbioru."""
+    now = time.time()
+    c = _avail_cache
+    if not refresh and c["pids"] is not None and now - c["at"] < AVAIL_PIDS_TTL:
+        return c["pids"]
+    if not refresh and AVAIL_PIDS_FILE.exists():
+        try:
+            d = json.loads(AVAIL_PIDS_FILE.read_text(encoding="utf-8"))
+            if now - d.get("at", 0) < AVAIL_PIDS_TTL:
+                s = {str(p) for p in d.get("pids") or []}
+                _avail_cache.update(at=d["at"], pids=s)
+                return s
+        except (json.JSONDecodeError, OSError):
+            pass
+    pids, page = set(), 0
+    while True:
+        data = idosell_client.search_products({
+            "returnProducts": "active",
+            "returnElements": ["code"],
+            "productParametersParams": idosell_client._param_filter(),
+            "productIsAvailable": "y",
+            "resultsPage": page, "resultsLimit": 100,
+        })
+        results = data.get("results") or []
+        for prod in results:
+            pids.add(str(prod.get("productId")))
+        page += 1
+        if page >= data.get("resultsNumberPage", 0) or not results:
+            break
+    _avail_cache.update(at=now, pids=pids)
+    try:
+        AVAIL_PIDS_FILE.write_text(
+            json.dumps({"at": now, "pids": sorted(pids)}, ensure_ascii=False),
+            encoding="utf-8")
+    except OSError:
+        pass
+    return pids
+
+
+@app.post("/api/idosell/queue-drop-unavailable")
+def idosell_queue_drop_unavailable():
+    """Sprzata kolejke obrobki z produktow NIEDOSTEPNYCH (brak stanu).
+    Stary feeder (przed avail=y) dosypal tez niedostepne - po wznowieniu
+    marnowalyby CPU i mogly trafic dalej. Oznacza je 'skipped' (worker pomija:
+    guard status != queued, linia ~348). Nie rusza obrobionych/wyslanych."""
+    try:
+        avail = get_available_pids(refresh=request.args.get("refresh") == "1")
+    except idosell_client.IdoSellError as e:
+        return jsonify({"error": str(e)}), 400
+    if not avail:
+        # pusty zbior = skan sie nie udal; NIE kasuj calej kolejki na slepo
+        return jsonify({"error": "Pusty zbior dostepnych - przerwano dla bezpieczenstwa"}), 400
+    dropped, kept = [], 0
+    with lock:
+        for jid in job_order:
+            j = jobs[jid]
+            if j.get("status") != "queued":
+                continue
+            pid = extract_product_id(Path(j.get("name", "")).stem)
+            if pid and pid not in avail:
+                j["status"] = "skipped"
+                j["error"] = "niedostepny (brak stanu magazynowego) - pominiety"
+                dropped.append(j.get("name"))
+            else:
+                kept += 1
+    if dropped:
+        persist_jobs()
+    return jsonify({"dropped": len(dropped), "kept": kept,
+                    "available_total": len(avail), "names": dropped[:100]})
 
 
 @app.get("/api/idosell/series")

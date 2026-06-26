@@ -571,6 +571,7 @@
         <button class="btn btn-ghost" id="studioLoadAll" onclick="toggleStudioAll()" style="color:#a29bfe;border-color:#3a3470" title="Domyślnie Studio pokazuje tylko 'w trakcie' i wgrane ręcznie (~8000 obrobionych IdoSell ukrytych dla szybkości - inaczej czarne tło). Ten przycisk ładuje CAŁĄ listę naraz (może chwilę mulić). Szybciej: wybierz Model/Kategorię/Sezon u góry.">📂 Załaduj wszystko</button>
         <button class="btn btn-ghost" id="studioSelectAll" title="Zaznacz wszystkie produkty IdoSell widoczne w Studio (do zbiorczej obróbki ponownej / wysyłki)">☑ Zaznacz wszystkie</button>
         <button class="btn btn-ghost" id="recomposeAllBtn" title="Zastosuj poprawiony pipeline (np. korekta bieli) do wszystkich obrobionych - bez modelu, z masek. NIE naprawia koloru Adobe RGB (do tego: Obrób ponownie). Nadpisuje wyniki lokalnie.">♻ Przelicz ponownie (bez modelu)</button>
+        <button class="btn btn-ghost" id="dropUnavailBtn" title="Usuń z kolejki obróbki produkty bez stanu magazynowego (niedostępne) - stary feeder mógł je dosypać. Żeby nie marnować CPU i nie wrzucać ich dalej.">🗑 Usuń niedostępne z kolejki</button>
         <button class="btn btn-ghost hidden" id="pauseBtn" style="color:#ffd166;border-color:#ffd166" title="Wstrzymaj obróbkę (zwalnia CPU do innej pracy) - kolejka zostaje, wznowisz kiedy chcesz, np. w nocy">⏸ Pauza</button>
         <button class="btn btn-ghost hidden" id="stopBtn" style="color:var(--err);border-color:var(--err)">⏹ Stop kolejki</button>
       </div>
@@ -578,6 +579,7 @@
         <label class="qa-filter"><input type="checkbox" id="qaOnly"> ⚠ Tylko z uwagami QA</label>
         <label class="qa-filter"><input type="checkbox" id="hideSent"> 🙈 Ukryj wysłane</label>
         <label class="qa-filter"><input type="checkbox" id="lowOnly"> ⚠ Tylko małe źródło</label>
+        <label class="qa-filter" title="Pokaż tylko produkty ze stanem magazynowym (dostępne w sklepie). Niedostępne i tak się nie sprzedają - nie ma sensu ich obrabiać ani wrzucać."><input type="checkbox" id="studioAvailOnly"> 📦 Tylko ze stanem</label>
         <select id="studioCat" title="Filtr po kategorii (Rodzaj z IdoSell)" style="font-size:12px">
           <option value="">Kategoria: wszystkie</option>
           <option value="sandały">sandały</option>
@@ -1220,6 +1222,7 @@ $("studioSeriesText").addEventListener("input", e => { studioSeriesText = e.targ
 $("lowOnly").addEventListener("change", e => { lowOnly = e.target.checked; render(); });
 $("studioCat").addEventListener("change", e => { studioCat = e.target.value; studioRefilter(); });
 $("studioSeason").addEventListener("change", e => { studioSeason = e.target.value; studioRefilter(); });
+$("studioAvailOnly").addEventListener("change", studioRefilter);   // tylko ze stanem -> przefiltruj serwerowo
 $("studioSeriesSel").addEventListener("change", e => {
   if (e.target.value) setStudioSeries(e.target.value, e.target.options[e.target.selectedIndex].text);
   else clearStudioSeries();
@@ -1487,6 +1490,20 @@ $("recomposeAllBtn").addEventListener("click", async () => {
   alert(`Przeliczono ${data.recomposed} z ${data.total} (pominięto bez masek: ${data.skipped}, błędy: ${data.errors}).`);
   lastJobsKey = ""; refresh();   // przerysuj miniatury ze swiezym rev
 });
+$("dropUnavailBtn").addEventListener("click", async () => {
+  if (!confirm("Usunąć z kolejki obróbki produkty BEZ stanu magazynowego (niedostępne)?\nZostaną pominięte (nie pójdą do obróbki ani dalej). Dostępne zostają w kolejce.")) return;
+  const btn = $("dropUnavailBtn");
+  btn.disabled = true; btn.textContent = "🗑 Sprawdzam stany...";
+  let data;
+  try {
+    const res = await api("/api/idosell/queue-drop-unavailable", { method: "POST" });
+    data = await res.json();
+  } catch { data = { error: "Błąd połączenia" }; }
+  btn.disabled = false; btn.textContent = "🗑 Usuń niedostępne z kolejki";
+  if (data.error) { alert(data.error); return; }
+  alert(`Usunięto z kolejki ${data.dropped} niedostępnych. Zostało dostępnych: ${data.kept}.`);
+  lastJobsKey = ""; refresh();
+});
 
 // ---------- stan zadan ----------
 let polling = null, lastJobs = [], lastJobsKey = "", hadActiveAllegro = false,
@@ -1652,12 +1669,16 @@ function clearStudioSeries() { studioSeries = ""; studioSeriesName = ""; studioR
 // trakcie'; "Zaladuj wszystko" -> pelna lista. Inaczej /api/jobs ciagnie
 // ~8000 zadan co 1.5s i dlawi serwer (czarne tlo). ===
 function studioJobsUrl() {
-  if (studioShowAll) return "/api/jobs";
-  if (studioSeries) return "/api/jobs?series=" + encodeURIComponent(studioSeries);
-  if (studioSeason) return "/api/jobs?season=" + encodeURIComponent(studioSeason);
-  if (studioCat) return "/api/jobs?category=" + encodeURIComponent(studioCat);
-  if (studioSeriesText) return "/api/jobs";   // szukanie po tekscie -> pelny zbior
-  return "/api/jobs?light=1";                  // domyslnie: bez masowego balastu (idosell+done)
+  let u;
+  if (studioShowAll) u = "/api/jobs";
+  else if (studioSeries) u = "/api/jobs?series=" + encodeURIComponent(studioSeries);
+  else if (studioSeason) u = "/api/jobs?season=" + encodeURIComponent(studioSeason);
+  else if (studioCat) u = "/api/jobs?category=" + encodeURIComponent(studioCat);
+  else if (studioSeriesText) u = "/api/jobs";   // szukanie po tekscie -> pelny zbior
+  else u = "/api/jobs?light=1";                 // domyslnie: bez masowego balastu (idosell+done)
+  if ($("studioAvailOnly") && $("studioAvailOnly").checked)
+    u += (u.includes("?") ? "&" : "?") + "avail=y";   // tylko ze stanem (productIsAvailable=y)
+  return u;
 }
 function studioIsLight() {
   return !studioShowAll && !studioSeries && !studioSeason && !studioCat && !studioSeriesText;
