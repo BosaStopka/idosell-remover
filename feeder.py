@@ -119,8 +119,11 @@ def active_pids():
 def season_products(season):
     off, out, total = 0, [], None
     while True:
+        # avail=y: TYLKO produkty ze stanem magazynowym (productIsAvailable).
+        # Bez tego feeder dosypywal tez niedostepne (~polowa katalogu) = marnowal
+        # robote (~33s/zdjecie) na produkty bez stanu, ktore i tak sie nie sprzedaja.
         d = get_json(f"/api/idosell/products?season={urllib.parse.quote(season)}"
-                     f"&sort=id_asc&offset={off}&limit=100")
+                     f"&avail=y&sort=id_asc&offset={off}&limit=100")
         ps = d.get("products", [])
         if not ps:
             break
