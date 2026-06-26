@@ -458,6 +458,14 @@ def compose(rgba: Image.Image, opt: dict, src_rgb: Image.Image = None) -> Image.
         # bialego paska miedzy butem a cieniem). Produkt nakladamy na wierzch,
         # wiec cien pod nim i tak jest zakryty, a kaluza istnieje tylko przy
         # linii kontaktu (dist > -blur) - przez otwory sandala nie przebija.
+        if opt.get("editor"):
+            # EDYTOR: cien jako OSOBNA warstwa - tylko tam gdzie NIE ma produktu.
+            # Przywrocone pedzlem biale tlo (produkt) jest wtedy na bialym kadrze
+            # bez cienia pod spodem -> znika; edycja maski nie psuje cienia.
+            prod_a = np.zeros((size[1], size[0]), np.float32)
+            prod_a[oy:oy + oh, ox:ox + ow] = np.asarray(
+                rgba.split()[3], np.float32) / 255.0
+            pool = pool * (1.0 - prod_a)
         layer = Image.fromarray(
             np.clip(pool * (op * 255.0), 0, 255).astype(np.uint8), "L")
         black = Image.new("RGBA", size, (0, 0, 0, 255))
@@ -611,10 +619,11 @@ def compose_from(rgb: Image.Image, alpha: Image.Image, opt: dict) -> Image.Image
     """Rekompozycja z recznie poprawiona maska - bez inferencji (sekundy).
     BEZ src_rgb -> compose idzie trybem MINIMAL (full_bleed i ZACHOWAJ
     wymagaja src_rgb): wymazane piksele -> CZYSTA BIEL, jak oczekuje edytor."""
-    options = {**DEFAULTS, **opt}
-    # BEZ globalnego rozmycia alfy - rozmazywalo kontur CALEGO produktu, nie
-    # tylko miejsce poprawki. Wygladzenie krawedzi robi teraz sam pedzel w
-    # edytorze (miekka krawedz pociagniecia), wiec tu skladamy maske 1:1.
+    # editor=True -> cien rysowany TYLKO tam gdzie NIE ma produktu (osobna
+    # warstwa pod spodem). Dzieki temu przywrocone pedzlem biale tlo laduje na
+    # bialym kadrze (znika), a wymazywanie/dokladanie poza konturem nie
+    # zostawia bialych plackow/wyrw w cieniu. Tylko sciezka edytora - bulk bez zmian.
+    options = {**DEFAULTS, **opt, "editor": True}
     rgba = rgb.convert("RGB").copy()
     rgba.putalpha(alpha.convert("L"))
     return compose(rgba, options)

@@ -108,6 +108,22 @@ def test_compose_from_returns_canvas():
     assert out.size == (300, 300)
 
 
+def test_compose_editor_shadow_not_under_product():
+    # EDYTOR: cien rysowany tylko tam gdzie NIE ma produktu. Przywrocone biale
+    # tlo (produkt) nad cieniem -> na bialym kadrze znika (nie ciemny placek).
+    import numpy as np
+    from PIL import Image
+    import pipeline
+    rgb = Image.new("RGB", (400, 400), (245, 245, 245))   # jasne (jak tlo studyjne)
+    a = np.zeros((400, 400), "uint8")
+    a[120:300, 120:280] = 255                              # "przywrocony" blok jasny
+    out = pipeline.compose_from(rgb, Image.fromarray(a, "L"), {"size": 400})
+    arr = np.asarray(out.convert("L"))
+    # obszar przywroconego jasnego bloku ma zostac jasny (cien pod nim usuniety),
+    # a nie zaciemniony przez kaluze
+    assert arr[150:280, 140:260].min() > 200, "jasny przywrocony obszar nie moze miec ciemnego cienia pod spodem"
+
+
 def test_clean_sole_studio_vs_fashion():
     import numpy as np
     from PIL import Image
