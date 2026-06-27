@@ -592,9 +592,20 @@ def process_bytes(data: bytes, opt: dict, with_parts: bool = False):
             if "bad allocation" not in str(e):
                 raise
     else:
-        raise RuntimeError(
-            f"Za malo wolnego RAM (3 proby): {last_err}. "
-            "Zamknij inne programy i sprobuj ponownie.")
+        # 3x bad_alloc: BiRefNet nie zmiescil sie w pamieci (marginalny pik /
+        # fragmentacja - zdarza sie NAWET przy wolnym RAM, nie tylko przy malym).
+        # Zamiast bledu -> FALLBACK crop_only (prog jasnosci, bez modelu): produkt
+        # ciemniejszy niz tlo wychodzi czysto, kadr sie domyka. Lepsze niz brak
+        # zdjecia; masowka sie samonaprawia. Log "OOM->crop_only" do przegladu.
+        print(f"BiRefNet OOM 3x -> fallback crop_only ({last_err})", flush=True)
+        alpha = white_bg_alpha(src)
+        rgba = src.convert("RGBA")
+        rgba.putalpha(alpha)
+        opt2 = {**options, "shadow_mode": "preserve", "shadow": True}
+        final = compose(rgba, opt2, src_rgb=src)
+        if with_parts:
+            return final, src.convert("RGB"), alpha, False
+        return final
 
     # alfa z podbitego obrazu, piksele z ORYGINALU
     rgba = src.convert("RGBA")
