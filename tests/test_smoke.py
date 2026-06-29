@@ -46,6 +46,8 @@ def test_ui_braces_parens_balanced():
     "async function reprocessPhoto(", "async function toPriority(",
     "function studioToPos2(", "function edUpdateCursor(",
     "function edUndoOnce(",
+    "function togglePhotoSel(", "async function batchPhotoAction(",
+    "function clearPhotoSel(",
 ])
 def test_ui_key_functions_present(fn):
     assert fn in _js(), f"brak funkcji UI: {fn}"

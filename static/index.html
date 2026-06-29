@@ -263,6 +263,15 @@
     box-shadow: 0 10px 28px rgba(124,108,255,.5);
   }
   .fab-send:hover { transform: translateY(-1px); }
+  .card.photo-sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+  .photo-cb { position: absolute; top: 6px; left: 6px; z-index: 2; line-height: 0; }
+  .photo-cb input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+  #photoBatchBar {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 26px; z-index: 61;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    background: var(--panel2); border: 1px solid var(--accent);
+    border-radius: 14px; padding: 10px 14px; box-shadow: 0 10px 28px rgba(0,0,0,.5);
+  }
   .searchbar input { flex: 1; }
 
   .overlay .panel.modal-box {
@@ -607,6 +616,14 @@
       <!-- plywajacy CTA: jezdzi przy scrollu, chowa sie gdy zakladka nieaktywna
            (element wewnatrz sekcji Studio - display:none rodzica go ukrywa) -->
       <button class="btn btn-primary fab-send" id="bulkPushBtn">📤 Wyślij gotowe do IdoSell</button>
+      <div id="photoBatchBar" class="hidden">
+        <span id="photoBatchCount" style="font-size:13px;font-weight:500;color:var(--accent2)"></span>
+        <span style="color:var(--muted);font-size:12px">zastosuj:</span>
+        <button class="btn btn-primary" style="height:34px;padding:0 12px" onclick="batchPhotoAction('full_bleed')" title="Wytnij tło i pełny kadr dla wszystkich zaznaczonych"><i class="ti ti-maximize"></i> Bez ramki</button>
+        <button class="btn btn-ghost" style="height:34px;padding:0 12px" onclick="batchPhotoAction('crop_only')" title="Przytnij tylko (próg, oryginalny cień) dla wszystkich zaznaczonych"><i class="ti ti-crop"></i> Przytnij tylko</button>
+        <button class="btn btn-ghost" style="height:34px;padding:0 12px" onclick="batchPhotoAction('process')" title="Obrób ponownie (standard BiRefNet) dla wszystkich zaznaczonych"><i class="ti ti-refresh"></i> Obrób ponownie</button>
+        <button class="btn btn-ghost" style="height:34px;padding:0 12px" onclick="clearPhotoSel()" title="Odznacz wszystkie"><i class="ti ti-x"></i> Odznacz</button>
+      </div>
     </section>
   </div>
 
@@ -1861,8 +1878,11 @@ function render() {
       if (j.status === "error") thumb = `<span style="font-size:30px">⚠️</span>`;
       if (j.status === "queued") thumb = `<span style="font-size:26px;color:var(--muted)">⏳</span>`;
       const canRetry = (j.status === "done" || j.status === "error") && j.orig;
-      html += `<div class="card">
-        <div class="thumb">${thumb}</div>
+      const batchable = j.source === "idosell" && j.pid != null && j.photo_index != null;
+      const selKey = batchable ? `${j.pid}_${j.photo_index}` : "";
+      const isSel = selKey && selectedPhotos.has(selKey);
+      html += `<div class="card${isSel ? " photo-sel" : ""}">
+        <div class="thumb">${batchable ? `<label class="photo-cb" title="Zaznacz do operacji wsadowej (Bez ramki / Przytnij tylko / Obrób)"><input type="checkbox" ${isSel ? "checked" : ""} onclick="event.stopPropagation(); togglePhotoSel('${esc(j.pid)}', ${j.photo_index}, this)"></label>` : ""}${thumb}</div>
         <div class="card-body">
           <span class="card-name">${esc(j.name)}</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -2763,6 +2783,49 @@ function studioSelectAll() {
   render();
 }
 $("studioSelectAll").addEventListener("click", studioSelectAll);
+
+// ---------- batch per-zdjecie: zaznacz wiele zdjec (tez przez produkty) i
+// zastosuj jeden tryb (Bez ramki / Przytnij tylko / Obrob) - leca priorytetowo
+// w tle (kazde przez istniejacy photo-action). Bez klik-czekaj-klik.
+const selectedPhotos = new Map();   // `${pid}_${index}` -> {pid, index}
+function togglePhotoSel(pid, index, cb) {
+  const key = pid + "_" + index;
+  if (cb.checked) selectedPhotos.set(key, { pid: String(pid), index });
+  else selectedPhotos.delete(key);
+  const card = cb.closest(".card"); if (card) card.classList.toggle("photo-sel", cb.checked);
+  updateBatchBar();
+}
+function clearPhotoSel() { selectedPhotos.clear(); updateBatchBar(); render(); }
+function updateBatchBar() {
+  const bar = $("photoBatchBar"); if (!bar) return;
+  const n = selectedPhotos.size;
+  if (n) { bar.classList.remove("hidden"); $("photoBatchCount").textContent = n + " zaznaczone zdjęcia"; }
+  else bar.classList.add("hidden");
+}
+async function batchPhotoAction(mode) {
+  const items = [...selectedPhotos.values()];
+  if (!items.length) return;
+  const cnt = $("photoBatchCount");
+  const btns = $("photoBatchBar").querySelectorAll("button");
+  btns.forEach(b => b.disabled = true);
+  let ok = 0, fail = 0;
+  for (let i = 0; i < items.length; i++) {
+    cnt.textContent = `zlecam ${i + 1}/${items.length}...`;
+    const fd = optionsForm(new FormData());
+    fd.append("index", items[i].index);
+    fd.append("action", "process");
+    if (mode === "full_bleed") { fd.set("full_bleed", "true"); fd.set("crop_only", "false"); }
+    else if (mode === "crop_only") { fd.set("crop_only", "true"); fd.set("full_bleed", "false"); }
+    try {
+      const res = await api(`/api/idosell/products/${items[i].pid}/photo-action`, { method: "POST", body: fd });
+      const d = await res.json(); if (d.error) fail++; else ok++;
+    } catch { fail++; }
+  }
+  btns.forEach(b => b.disabled = false);
+  selectedPhotos.clear(); updateBatchBar();
+  alert(`Zlecono ${ok} zdjęć do obróbki (lecą priorytetowo w tle)` + (fail ? `\nBłędy: ${fail}` : ""));
+  lastJobsKey = ""; startPolling(); render();
+}
 
 // ---------- edytor maski (pędzel) ----------
 const ed = {
